@@ -90,6 +90,25 @@ class LibraryDirs(unittest.TestCase):
         self.assertEqual(app.rip_folder_in_library(str(root) + "-rips", cfg), "")  # same prefix, different folder
         self.assertEqual(app.rip_folder_in_library(str(root / "x"), {}), "")
 
+    def test_extras_style(self):
+        import review
+        root = lib("Movies")
+        old = (review.CFG, review.LIB_ROOT)
+        it = {"role": "extra", "category": "Behind the Scenes", "name": "Ithaca", "dest_dir": "Movies\\Film (2026) {tmdb-1}"}
+        try:
+            review.LIB_ROOT = root
+            review.CFG = {**identify.DEFAULTS, "extras_style": "folders"}
+            self.assertEqual(review.dest_for(it).relative_to(root).parts[-2:], ("Behind the Scenes", "Ithaca.mkv"))
+            review.CFG = {**identify.DEFAULTS, "extras_style": "suffix"}
+            self.assertEqual(review.dest_for(it).relative_to(root).parts[-2:], ("Film (2026) {tmdb-1}", "Ithaca-behindthescenes.mkv"))
+            review.CFG = {**identify.DEFAULTS, "extras_style": "suffix", "media_server": "kodi"}
+            self.assertEqual(review.dest_for(it).relative_to(root).parts[-2:], ("Extras", "Ithaca.mkv"))
+        finally:
+            review.CFG, review.LIB_ROOT = old
+        # a tagged extra next to the film isn't mistaken for a copy of the film
+        self.assertTrue(identify.EXTRA_TAGGED.search("Ithaca-behindthescenes"))
+        self.assertFalse(identify.EXTRA_TAGGED.search("Film (2026) {tmdb-1}"))
+
 
 if __name__ == "__main__":
     unittest.main()

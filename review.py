@@ -597,6 +597,8 @@ def dest_for(item: dict, plan: dict | None = None) -> Path:
                     and (o.get("category") or "Other") == cat]
             idx = str(next((k for k, o in enumerate(same, 1) if o is item), 1)) if len(same) > 1 else ""
             name = f"{item['attach_to']}-{EXTRA_SUFFIX.get(cat, 'other')}{idx}"
+        elif naming.extras_suffixed(CFG):  # "Making Of-featurette.mkv" next to the film or in the season folder
+            name = f"{name}-{EXTRA_SUFFIX.get(cat, 'other')}"
         else:
             parts.append(folder)
     return identify.lib_path(LIB_ROOT, "\\".join(parts)) / (identify.fs_safe(name) + ".mkv")

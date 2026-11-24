@@ -52,6 +52,7 @@ DEFAULTS = {
     "tv_folder": "",
     # plex, jellyfin, emby or kodi: how filed files are named (naming.py)
     "media_server": "plex",
+    "extras_style": "folders",  # special features in Featurettes\, Trailers\... folders, or "suffix": Name-featurette.mkv
     # Put each format in its own folder (Movies\Blu-Ray\Title ...)? Off: Movies\Title ...
     "format_folders": False,
     # DVDCompare has no API; looking extras up there means reading its web pages. Off unless you turn it on.
@@ -399,6 +400,10 @@ def library_show_match(lib: dict, query: str) -> dict | None:
     return best
 
 
+# Extras tagged in the file name, next to the film (Plex/Jellyfin/Emby): "Making Of-featurette.mkv"
+EXTRA_TAGGED = re.compile(r"-(?:behindthescenes|deleted|deletedscene|featurette|interview|scene|short|trailer|other|clip|extra)\d*$", re.I)
+
+
 def episodes_in_library(lib: dict, tmdb_id: str, title_norm: str, season: int) -> set[int]:
     eps: set[int] = set()
     for s in lib["shows"]:
@@ -500,7 +505,8 @@ def library_copies(plan: dict, lib: dict, cfg: dict) -> dict[str, list[dict]]:
         have = []
         for f in folders:
             try:
-                vids = [p for p in f["folder"].iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXT]
+                vids = [p for p in f["folder"].iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXT
+                        and not EXTRA_TAGGED.search(p.stem)]  # "Making Of-featurette.mkv" is an extra, not the film
             except OSError:
                 continue
             for v in vids:

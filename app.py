@@ -54,6 +54,7 @@ SETTINGS = [  # (key, label, kind)
     ("tv_folder", "TV shows folder (inside the media library or anywhere; empty = find it, else TV Shows)", "text"),
     ("music_library_root", "Music folder (empty = the music folder in the media library, else Music)", "text"),
     ("media_server", "Media server (decides how files are named)", "select"),
+    ("extras_style", "How special features are filed", "select"),
     ("format_folders", "Separate folders per format (Movies\\Blu-Ray\\..., Movies\\DVD\\...)", "bool"),
     ("use_dvdcompare", "Also look up extras names on DVDCompare (reads its web pages)", "bool"),
     ("use_community", "Look discs up in the shared Shelfrip disc database", "bool"),
@@ -92,7 +93,9 @@ SETTINGS = [  # (key, label, kind)
     ("app_window", "Open Shelfrip in its own window (not a browser tab)", "bool"),
     ("tray_icon", "Keep Shelfrip running by the clock when its window is closed (Quit from the icon's menu)", "bool"),
 ]
-CHOICES = {"media_server": [{"value": k, "label": v} for k, v in naming.SERVERS.items()]}
+CHOICES = {"media_server": [{"value": k, "label": v} for k, v in naming.SERVERS.items()],
+           "extras_style": [{"value": "folders", "label": "In folders: Featurettes\\Making Of.mkv"},
+                            {"value": "suffix", "label": "Tagged in the name: Making Of-featurette.mkv"}]}
 
 
 # --------------------------------------------------------------------------- alerts

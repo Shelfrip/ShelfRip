@@ -132,6 +132,10 @@ TV shows go in `TV Shows\Show (Year)\Season 1\Show (Year) - s01e01 - Title.mkv`.
 recognises an existing library whichever style it uses. You can also keep each format in its own
 folder (`Movies\Blu-Ray\...`, `Movies\DVD\...`).
 
+On Plex, Jellyfin and Emby you can also file special features tagged in the file name, next to the
+film, instead of in folders: `Making Of-featurette.mkv`, `Teaser-trailer.mkv` (Settings › Library
+and folders › How special features are filed).
+
 Already have movie and TV folders with other names, like `movies`, `Films` or `TVShows`? Shelfrip
 finds them whatever their case or spacing and files into them. To pick them yourself, use
 **Settings › Library and folders › Movies folder / TV shows folder**. They can be anywhere, even on
