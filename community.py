@@ -104,34 +104,26 @@ def lookup(disc: dict, titles: list[dict], cfg: dict, log=print) -> dict | None:
         return None
     if not ans.get("found") or not ans.get("kind"):
         return None
+    # Answers come from other people's filings: only use one that's well formed, so a bad value
+    # can't break planning this disc (it's planned the usual way instead).
+    if (ans.get("kind") not in ("movie", "tv") or not re.fullmatch(r"\d{1,9}", str(ans.get("tmdb_id") or ""))
+            or (ans.get("season") is not None and not re.fullmatch(r"\d{1,3}", str(ans.get("season"))))):
+        log("    (the Shelfrip disc database's answer for this disc looks broken: not using it)")
+        return None
+    conf = ans.get("confidence")
+    ans["confidence"] = max(0, min(100, int(conf))) if isinstance(conf, (int, float)) and not isinstance(conf, bool) else None
     if ans.get("disputed"):
         log(f"    (the Shelfrip disc database says {ans.get('title')}, but people reported that as wrong: not using it)")
         return None
 
     import catalog
-    rows = ans.get("titles") or []
-    pairs: dict[str, dict] = {}
-    used: set[int] = set()
-    for t in titles:
-        for i, r in enumerate(rows):
-            if i in used:
-                continue
-            same_size = r.get("size_bytes") and r.get("size_bytes") == t.get("size_bytes")
-            same_play = (r.get("source_file") and r.get("source_file") == t.get("source_file") and
-                         abs((r.get("duration_s") or 0) - t.get("duration_seconds", 0)) <= 2)
-            if same_size or same_play:
-                row = catalog._as_discdb_row({
-                    "role": r.get("role"), "kept": r.get("kept"), "category": r.get("category"),
-                    "name": r.get("name") or "", "season": r.get("season"), "episode": r.get("episode"),
-                    "size_bytes": r.get("size_bytes"), "duration_s": r.get("duration_s")})
-                row["votes"], row["confirmed"] = r.get("votes", 0), bool(r.get("confirmed"))
-                row["episode_last"] = str(r["episode_last"]) if r.get("episode_last") else ""
-                row["confidence"] = 100 if ans.get("locked") else r.get("confidence")  # 0-100
-                if isinstance(r.get("tracks"), dict):
-                    row["tracks"] = r["tracks"]
-                pairs[t["output_file"]] = row
-                used.add(i)
-                break
+    rows = ans.get("titles") if isinstance(ans.get("titles"), list) else []
+    rows = [r for r in rows if isinstance(r, dict)]
+    try:
+        pairs = _pair_titles(rows, titles, ans, catalog)
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        log(f"    (the Shelfrip disc database's answer for this disc looks broken ({exc}): not using it)")
+        return None
     if len(pairs) < max(1, len(titles) // 2):
         return None
     who = ("checked by hand" if ans.get("locked") else
@@ -145,6 +137,38 @@ def lookup(disc: dict, titles: list[dict], cfg: dict, log=print) -> dict | None:
         "season": ans.get("season"), "confidence": 100 if ans.get("locked") else ans.get("confidence"),
         "source": f"{SOURCE} ({ans.get('title')}; {who})", "src_name": "the Shelfrip disc database",
     }
+
+
+def _pair_titles(rows: list[dict], titles: list[dict], ans: dict, catalog) -> dict[str, dict]:
+    """Match the database's titles to this rip's files (same size, or same playlist and length),
+    as rows apply_discdb takes, keyed by output file."""
+    pairs: dict[str, dict] = {}
+    used: set[int] = set()
+    for t in titles:
+        for i, r in enumerate(rows):
+            if i in used:
+                continue
+            same_size = r.get("size_bytes") and r.get("size_bytes") == t.get("size_bytes")
+            same_play = (r.get("source_file") and r.get("source_file") == t.get("source_file") and
+                         abs((r.get("duration_s") or 0) - t.get("duration_seconds", 0)) <= 2)
+            if same_size or same_play:
+                if r.get("role") not in ("main", "edition", "episode", "extra", "play_all"):
+                    raise ValueError(f"unknown role {r.get('role')!r}")
+                row = catalog._as_discdb_row({
+                    "role": r.get("role"), "kept": r.get("kept"), "category": r.get("category"),
+                    "name": r.get("name") or "", "season": r.get("season"), "episode": r.get("episode"),
+                    "size_bytes": r.get("size_bytes"), "duration_s": r.get("duration_s")})
+                row["votes"], row["confirmed"] = r.get("votes", 0), bool(r.get("confirmed"))
+                row["episode_last"] = str(r["episode_last"]) if str(r.get("episode_last") or "").isdigit() else ""
+                c = r.get("confidence")
+                row["confidence"] = 100 if ans.get("locked") else (  # 0-100; anything else is dropped
+                    max(0, min(100, int(c))) if isinstance(c, (int, float)) and not isinstance(c, bool) else None)
+                if isinstance(r.get("tracks"), dict):
+                    row["tracks"] = r["tracks"]
+                pairs[t["output_file"]] = row
+                used.add(i)
+                break
+    return pairs
 
 
 # --------------------------------------------------------------------------- share

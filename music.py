@@ -775,10 +775,25 @@ def lyrics(plan: dict, it: dict) -> tuple[str, str] | None:
 INDEX_NAME = "music_index.json"
 
 
-def _index(cfg: dict) -> dict:
+def _index(cfg: dict, strict: bool = False) -> dict:
+    """Filed CDs by disc id (folder, album, artist), from _Filed\\music_index.json.
+
+    With strict=True (before adding to it) a file that's there but unreadable is first copied to
+    music_index.broken.json, so writing the new entry can't silently drop every CD filed before.
+    """
+    path = Path(cfg["output_root"]) / "_Filed" / INDEX_NAME
     try:
-        return json.loads((Path(cfg["output_root"]) / "_Filed" / INDEX_NAME).read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
     except Exception:
+        if strict:
+            try:
+                import shutil
+                shutil.copy2(path, path.with_name("music_index.broken.json"))
+            except OSError:
+                pass
         return {}
 
 
@@ -943,13 +958,15 @@ def file_job(folder: Path, plan: dict, job: dict, cfg: dict, log=print) -> list[
     job["note"] = "; ".join(x for x in (job.get("note"), ", ".join(notes)) if x)
     # remember the disc, so the app knows it's in the library next time it's inserted
     idx_path = Path(cfg["output_root"]) / "_Filed" / INDEX_NAME
-    idx = _index(cfg)
+    idx = _index(cfg, strict=True)
     idx[plan["discid"]] = {"folder": str(d), "album": plan.get("album"), "artist": plan.get("album_artist"),
                            "disc": plan.get("disc"), "discs": plan.get("discs"), "release": plan.get("release", ""),
                            "compilation": bool(plan.get("compilation")), "year": plan.get("year", ""),
                            "filed_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
     idx_path.parent.mkdir(parents=True, exist_ok=True)
-    idx_path.write_text(json.dumps(idx, indent=2), encoding="utf-8")
+    tmp = idx_path.with_name(INDEX_NAME + ".tmp")  # write then rename, so a crash can't leave half a file
+    tmp.write_text(json.dumps(idx, indent=2), encoding="utf-8")
+    tmp.replace(idx_path)
     return filed
 
 

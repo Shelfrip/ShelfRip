@@ -141,6 +141,19 @@ class Lookup(unittest.TestCase):
         known = self.lookup(ans)
         self.assertIsNone(known["pairs"]["t00.mkv"]["confidence"])
 
+    def test_broken_answers_are_ignored(self):
+        for bad in ({"tmdb_id": "603; drop"}, {"kind": "music"}, {"season": "one"}):
+            self.assertIsNone(self.lookup({**self.ANSWER, **bad}), bad)
+        ans = copy.deepcopy(self.ANSWER)
+        ans["titles"][0]["duration_s"] = "long"   # wrong type from the server: planned without it
+        ans["titles"][0]["size_bytes"] = None
+        self.assertIsNone(self.lookup(ans))
+        ans = copy.deepcopy(self.ANSWER)
+        ans["confidence"], ans["titles"][0]["confidence"] = 250, "high"
+        known = self.lookup(ans)
+        self.assertEqual(known["confidence"], 100)
+        self.assertIsNone(known["pairs"]["t00.mkv"]["confidence"])
+
     def test_commentary_names_carried_over(self):
         p = plan()
         for it in p["items"]:
