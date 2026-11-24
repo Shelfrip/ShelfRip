@@ -596,6 +596,16 @@ def makemkv_problem(text: str) -> str:
     return found[:300]
 
 
+def drive_lost(text: str) -> bool:
+    """MakeMKV couldn't open the drive at all (it disconnected, or the disc was taken out): retrying
+    the titles can't help, unlike read errors on a scratched disc."""
+    for line in text.splitlines():
+        kind, f = split_robot_line(line)
+        if kind == "MSG" and f and f[0] in ("2024", "5010"):
+            return True
+    return bool(re.search(r"Unknown device|Failed to open disc", text, re.I))
+
+
 def rip_disc(cfg: dict, drive: dict) -> dict:
     if drive.get("audio"):  # music CD: ripped to FLAC by cyanrip (music.py)
         import music
@@ -761,7 +771,11 @@ def rip_disc(cfg: dict, drive: dict) -> dict:
     cancelled = st.get("cancel")
 
     # 2b. a scratched or dirty disc: rip the titles that didn't come out whole once more
-    if not cancelled and cfg.get("retry_failed_titles", True):
+    lost = not cancelled and drive_lost(rip_out) and not any(out_dir.glob("*.mkv"))
+    if lost:
+        log(f"{device} [{label}] MakeMKV couldn't open the {device} drive: it disconnected or the disc was "
+            f"taken out. Not retrying; put the disc back in and rip it again")
+    if not cancelled and not lost and cfg.get("retry_failed_titles", True):
         bad = [t for t in wanted if not title_complete(cfg, out_dir / t["output_file"], t)]
         if bad:
             log(f"{device} [{label}] {len(bad)} title(s) didn't rip cleanly, trying them once more")
@@ -789,6 +803,11 @@ def rip_disc(cfg: dict, drive: dict) -> dict:
     disc.update({"status": status, "titles_saved": saved, "titles_failed": failed,
                  "finished_at": dt.datetime.now().isoformat(timespec="seconds")})
     problem = "" if status == "ok" else makemkv_problem(rip_out)
+    if lost:
+        problem = (f"MakeMKV couldn't open the {device} drive, so nothing was saved: it may have disconnected, "
+                   f"or the disc was taken out. Put the disc back in and rip it again (a USB drive may need a "
+                   f"powered hub or another port).")
+        disc["drive_lost"] = True
     if problem:
         disc["makemkv_error"] = problem
     if not cancelled:  # a cancelled rip gets no disc_info.json, so it isn't named or filed
@@ -811,7 +830,7 @@ def rip_disc(cfg: dict, drive: dict) -> dict:
                        "cancelled" if cancelled else f"{saved} saved, {failed} failed"
                        + (f". MakeMKV said: {problem}" if problem else ": check rip.log")),
               cancel=False, phase="")
-    if not cancelled and (failed or disc["read_errors"]):
+    if not cancelled and not lost and (failed or disc["read_errors"]):  # a lost drive isn't a damaged disc
         note_damaged(cfg, label, out_dir, disc["read_errors"], failed, disc["damaged_files"], problem)
     if cfg.get("eject_when_done", True) and not cancelled:
         eject(device)

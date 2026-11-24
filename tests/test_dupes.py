@@ -263,6 +263,34 @@ class RipDisc(unittest.TestCase):
         self.assertEqual([c[3] for c in rips], ["all"])
         self.assertNotIn("skipped_duplicates", info)
 
+    def test_drive_lost_is_not_retried(self):
+        # a USB drive dropped off: MakeMKV can't open it, nothing is saved, and retrying can't help
+        disc = {"titles": [title(0, 3000, "1"), title(1, 3000, "2")]}
+        calls = []
+        lost = ('MSG:2024,0,1,"Unknown device - \'J:\'","Unknown device - \'%1\'","J:"\n'
+                'MSG:5010,0,0,"Failed to open disc","Failed to open disc"')
+
+        def fake(cfg, args, logfile=None, on_progress=None, device="", on_phase=None):
+            calls.append(args)
+            return (0, "info") if args[1] == "info" else (1, lost)
+
+        cfg = {**rip_all.DEFAULT_CONFIG, "output_root": str(TMP / "rip"), "skip_duplicate_features": False,
+               "eject_when_done": False, "retry_failed_titles": True, "use_community": False, "use_thediscdb": False}
+        rip_all.run_makemkv, old_run = fake, rip_all.run_makemkv
+        rip_all.parse_disc_info, old_parse = (lambda _: json.loads(json.dumps(disc))), rip_all.parse_disc_info
+        try:
+            info = rip_all.rip_disc(cfg, {"device": "J:", "disc_label": "LOST_DRIVE", "drive_name": "x", "index": 2})
+        finally:
+            rip_all.run_makemkv, rip_all.parse_disc_info = old_run, old_parse
+        self.assertEqual(len([c for c in calls if c[1] == "mkv"]), 1)  # no retries
+        self.assertTrue(info.get("drive_lost"))
+        self.assertEqual(info["status"], "check")
+        self.assertIn("disconnected", info["makemkv_error"])
+
+    def test_drive_lost_detection(self):
+        self.assertTrue(rip_all.drive_lost('MSG:5010,0,0,"Failed to open disc","Failed to open disc"'))
+        self.assertFalse(rip_all.drive_lost('MSG:2003,0,1,"Error \'Scsi error - MEDIUM ERROR\' occurred while reading"'))
+
 
 if __name__ == "__main__":
     unittest.main()

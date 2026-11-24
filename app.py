@@ -386,7 +386,9 @@ class Ripper:
         label, dev = disc.get("disc_label"), disc.get("drive")
         try:
             n = review.plan_new_folders()
-            rip_all.log(f"{label}: named, ready to review" if n else f"{label}: ripped")
+            saved = disc.get("titles_saved", 0) if disc.get("status") != "ok" else None
+            rip_all.log(f"{label}: named, ready to review" if n else
+                        f"{label}: nothing was saved" if saved == 0 else f"{label}: ripped")
         except Exception as exc:
             rip_all.log(f"{label}: couldn't name it ({exc})")
         ok = disc.get("status") == "ok"
@@ -398,7 +400,8 @@ class Ripper:
                            f"damaged files: {', '.join(disc.get('damaged_files') or []) or 'none'}")
         notify(f"{dev} finished" if ok else f"{dev} needs a look",
                f"{label} is ripped and waiting in Review. Check the names, then file it to eject the disc."
-               if ok else f"{label} finished with problems ({disc.get('titles_failed', 0)} titles failed).")
+               if ok else f"{label}: {disc['makemkv_error']}" if disc.get("drive_lost")
+               else f"{label} finished with problems ({disc.get('titles_failed', 0)} titles failed).")
 
     def state(self) -> dict:
         drives = []
