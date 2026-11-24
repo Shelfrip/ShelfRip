@@ -1,7 +1,7 @@
 r"""
 app.py - Shelfrip: one app for ripping, naming, reviewing and filing.
 
-Double-click Shelfrip.exe (installed), or "Disc Ripper.bat" in a copy run from the scripts. It opens one
+Double-click Shelfrip.exe (installed), or "Run Shelfrip.bat" in a copy run from the scripts. It opens one
 page in your browser
 (http://localhost:8765, only reachable from this PC) with three tabs:
 
@@ -255,6 +255,8 @@ class Ripper:
         threading.Thread(target=self.loop, daemon=True).start()
 
     def load(self) -> None:
+        """Re-read settings each loop, so changes in Settings apply without a restart. A setup problem
+        (no rip folder, no MakeMKV) is kept in self.error for the Home page instead of raising."""
         try:
             self.cfg = rip_all.load_config(exit_on_error=False)
             self.error = ""
@@ -266,6 +268,8 @@ class Ripper:
             self.cfg, self.error = None, f"Couldn't read the settings: {exc}"
 
     def loop(self) -> None:
+        """The background loop: watch the drives, start a rip for each new disc (when auto-rip is on
+        or you clicked Rip), plan finished rips for review, and do the hourly upkeep."""
         while True:
             self.beat = time.time()
             self.load()
@@ -407,6 +411,8 @@ class Ripper:
                else f"{label} finished with problems ({disc.get('titles_failed', 0)} titles failed).")
 
     def state(self) -> dict:
+        """Everything the Home page polls for: each drive with its rip progress and filing status,
+        setup problems, queue stats, errors to offer reporting, and the latest log lines."""
         drives = []
         for d in self.drives:
             st = dict(rip_all.STATUS.get(d["device"], {}))
@@ -450,8 +456,9 @@ class Ripper:
             if a and (d["ripping"] or d["elsewhere"]):
                 want = d.get("bytes_total") or 0
                 if want and d["ripping"]:  # only what this rip saves (not titles left out, or already done)
-                    a = {**a, "total": want, "pct": min(99, int(100 * a["done"] / want)),
-                         "eta_s": int((want - a["done"]) / (a["mb_s"] * 1e6)) if a["mb_s"] and want > a["done"] else None}
+                    got = max(0, a["done"] - (d.get("bytes_base") or 0))  # files finished before a resume/retry don't count
+                    a = {**a, "total": want, "pct": min(99, int(100 * got / want)),
+                         "eta_s": int((want - got) / (a["mb_s"] * 1e6)) if a["mb_s"] and want > got else None}
                 d["progress"] = a
         try:
             stats = job_stats(waiting, len(self.busy))
@@ -521,6 +528,7 @@ def tray_status() -> str:
 
 
 def quit_app(ask: bool = True) -> None:
+    """Stop Shelfrip. With ask=True, a rip or filing still running asks first (Windows message box)."""
     running = sorted(RIPPER.busy) if RIPPER else []
     running += [k for k, j in review.JOBS.items() if j.get("state") == "running"]
     if running and ask and os.name == "nt":
@@ -569,6 +577,7 @@ def restart_app() -> None:
 
 
 def start_tray(url: str, use_window: bool) -> None:
+    """The notification-area icon and its menu (open, auto-rip on/off, show the log, quit)."""
     global TRAY
     shown = {"console": False}
 
@@ -1002,14 +1011,38 @@ def check_update() -> None:
 
 # --------------------------------------------------------------------------- settings
 
-def _read_config() -> dict:
+def _read_config(strict: bool = False) -> dict:
+    """The saved settings as a dict ({} when there are none yet).
+
+    With strict=True (used before saving) a settings file that exists but can't be read raises
+    instead of returning {}, so a locked or half-written file never gets overwritten with only
+    the one value being saved (which would wipe the TMDB key, folders and everything else).
+    A file that is there but isn't valid JSON is copied to config.broken.json first.
+    """
+    path = identify.CONFIG_PATH
     try:
-        return json.loads(identify.CONFIG_PATH.read_text(encoding="utf-8-sig"))
-    except Exception:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except ValueError:
+        if strict:
+            try:
+                import shutil
+                shutil.copy2(path, path.with_name("config.broken.json"))
+            except OSError as e:
+                raise ValueError(f"Your settings file couldn't be read ({e}). Close anything that has it open and try again.")
+            return {}  # kept a copy; start from defaults rather than refusing forever
+        return {}
+    except OSError as e:
+        if strict:
+            raise ValueError(f"Your settings file couldn't be read ({e}). Close anything that has it open and try again.")
         return {}
 
 
 def settings_view() -> dict:
+    """Every setting for the Settings page and setup wizard: saved value or default, label,
+    kind and choices. Secrets are never sent back, only whether one is saved."""
     raw = _read_config()
     merged = {"check_plex_before_rip": True, "notifications": True, "check_updates": True, **JOB_DEFAULTS}
     merged.update(rip_all.DEFAULT_CONFIG)
@@ -1043,7 +1076,21 @@ def settings_view() -> dict:
 
 
 def save_settings(values: dict) -> None:
-    raw = _read_config()
+    """Merge the values from the Settings page or setup wizard into config.json.
+
+    Only known keys are kept, each checked against its kind (number, yes/no, one of the listed
+    choices, folder). An empty secret keeps the saved key. Raises ValueError with a message
+    for the user when a value can't be used or the file can't be read.
+    """
+    with paths.CONFIG_LOCK:  # the wizard autosaves while you type: one read-modify-write at a time
+        _save_settings(values)
+    review.reload_config()
+    if RIPPER:
+        RIPPER.wake.set()
+
+
+def _save_settings(values: dict) -> None:
+    raw = _read_config(strict=True)
     if values.get("setup_done"):
         raw["setup_done"] = True
     if "setup_step" in values:  # which first-time setup screen you were on, so quitting halfway resumes there
@@ -1082,13 +1129,10 @@ def save_settings(values: dict) -> None:
                 raise ValueError("That isn't a folder Shelfrip can use. Pick one with Browse.")
             v = rel
         raw[key] = v
-    identify.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = identify.CONFIG_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(raw, indent=2), encoding="utf-8")
-    tmp.replace(identify.CONFIG_PATH)
-    review.reload_config()
-    if RIPPER:
-        RIPPER.wake.set()
+    try:
+        paths.write_config(raw)
+    except OSError as e:
+        raise ValueError(f"Couldn't save settings ({e}). Another program may have config.json open: try again in a moment.")
 
 
 # --------------------------------------------------------------------------- web

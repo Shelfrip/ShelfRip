@@ -31,7 +31,8 @@ def _redact(text: str) -> str:
     user = os.environ.get("USERNAME") or os.environ.get("USER") or ""
     text = text.replace(home, "~").replace(home.replace("\\", "/"), "~")
     if len(user) >= 3:
-        text = re.sub(re.escape(user), "<user>", text, flags=re.I)
+        # whole words only, so a user called "ann" doesn't turn "channel" into "ch<user>el"
+        text = re.sub(r"(?<![A-Za-z0-9])" + re.escape(user) + r"(?![A-Za-z0-9])", "<user>", text, flags=re.I)
     return text
 
 

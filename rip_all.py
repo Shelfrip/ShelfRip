@@ -123,11 +123,22 @@ class SetupError(Exception):
 
 
 def load_config(exit_on_error: bool = True) -> dict:
+    """Defaults overlaid with config.json, plus MakeMKV's location. Raises SetupError (or exits,
+    when run from the command line) if there's no rip folder, no MakeMKV, or the file is unreadable."""
     cfg = dict(DEFAULT_CONFIG)
     if CONFIG_PATH.exists():
-        cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig")))
+        try:
+            mine = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as exc:
+            # don't rip with default folders when the real settings are there but unreadable
+            msg = f"Your settings file ({CONFIG_PATH}) couldn't be read: {exc}. Open Settings and save them again."
+            if exit_on_error:
+                sys.exit(msg)
+            raise SetupError(msg)
+        if isinstance(mine, dict):
+            cfg.update(mine)
     else:
-        CONFIG_PATH.write_text(json.dumps(DEFAULT_CONFIG, indent=2), encoding="utf-8")
+        paths.write_config(DEFAULT_CONFIG)
         log(f"Created default settings file: {CONFIG_PATH}")
     if not str(cfg.get("output_root") or "").strip():
         msg = "Choose a rip folder in Settings (where ripped discs are saved) before ripping."
@@ -175,6 +186,8 @@ def split_robot_line(line: str) -> tuple[str, list[str]]:
 
 
 def parse_drives(output: str) -> list[dict]:
+    """Drives from MakeMKV's robot output (DRV lines): device letter, drive name, disc label,
+    and whether a disc is loaded."""
     drives = []
     for line in output.splitlines():
         kind, f = split_robot_line(line)
@@ -203,6 +216,8 @@ def hms_to_seconds(s: str) -> int:
 
 
 def parse_disc_info(output: str) -> dict:
+    """Titles, lengths, sizes, chapters, playlists and streams from `makemkvcon info` robot
+    output (CINFO / TINFO / SINFO lines), as the dict saved in disc_info.json."""
     disc: dict = {"titles": {}}
     for line in output.splitlines():
         kind, f = split_robot_line(line)
@@ -393,6 +408,8 @@ def windows_drives() -> list[dict] | None:
 
 
 def scan_drives(cfg: dict) -> list[dict]:
+    """Optical drives and the discs in them. Asks Windows first (doesn't disturb busy drives),
+    falling back to MakeMKV's own drive list."""
     drives = None
     if os.name == "nt":
         drives = windows_drives()
@@ -472,8 +489,17 @@ def safe_folder_name(label: str) -> str:
 
 
 def eject(device: str) -> None:
+    """Open the tray of a drive given as a Windows drive letter like "E:".
+
+    The letter goes into a PowerShell command, so anything that isn't a plain drive letter is
+    ignored rather than passed through (a drive name comes from MakeMKV and config files).
+    """
+    m = re.fullmatch(r"\s*([A-Za-z]):?\\?\s*", str(device or ""))
+    if not m:
+        log(f"Not ejecting {device!r}: that isn't a drive letter")
+        return
     ps = (f"(New-Object -ComObject Shell.Application).Namespace(17)"
-          f".ParseName('{device}').InvokeVerb('Eject')")
+          f".ParseName('{m.group(1).upper()}:').InvokeVerb('Eject')")
     subprocess.run(["powershell", "-NoProfile", "-Command", ps],
                    capture_output=True,
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -506,6 +532,23 @@ def partial_rip(cfg: dict, label: str) -> Path | None:
     return None
 
 
+def bytes_kept(out_dir: Path, rewriting: list[dict]) -> int:
+    """Bytes of the MKVs in out_dir this pass won't rewrite (titles finished earlier).
+
+    The progress bar counts every MKV in the folder, so on a resume or retry these are taken
+    off; otherwise it would start near 100% and sit at 99% for the whole pass.
+    """
+    again = {t.get("output_file") for t in rewriting}
+    total = 0
+    for p in out_dir.glob("*.mkv"):
+        if p.name not in again:
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
 def title_complete(cfg: dict, path: Path, title: dict) -> bool:
     """Is this ripped file finished? Its length must match the disc's (MKVToolNix), or failing
     that its size must be close to MakeMKV's estimate."""
@@ -529,6 +572,9 @@ def title_complete(cfg: dict, path: Path, title: dict) -> bool:
         except Exception:
             pass
     want = title.get("size_bytes") or 0
+    # Only used without MKVToolNix. MakeMKV's estimate can be several percent high, and a 3% margin
+    # re-read whole discs for nothing (tester reports, PR #12); a rip cut short by a read error is
+    # usually far more than 10% short.
     return bool(want) and path.stat().st_size >= 0.9 * want
 
 
@@ -607,6 +653,9 @@ def drive_lost(text: str) -> bool:
 
 
 def rip_disc(cfg: dict, drive: dict) -> dict:
+    """Rip one disc: read its titles, leave out duplicates and scene-by-scene copies, rip the
+    rest (resuming an interrupted rip), retry titles that came out short, and save
+    disc_info.json. Returns the disc info with status ok / check / cancelled."""
     if drive.get("audio"):  # music CD: ripped to FLAC by cyanrip (music.py)
         import music
         return music.rip_cd(cfg, drive)
@@ -620,7 +669,7 @@ def rip_disc(cfg: dict, drive: dict) -> dict:
     log(f"{device} [{label}] scanning disc -> {out_dir}")
     st = STATUS.setdefault(device, {})
     st.update(label=label, state="scanning", pct=0, folder=out_dir.name, started=started.isoformat(timespec="seconds"),
-              message="Reading the disc", phase="", titles=[], bytes_total=0)
+              message="Reading the disc", phase="", titles=[], bytes_total=0, bytes_base=0)
 
     # 1. scan titles
     def phase(name: str) -> None:
@@ -747,6 +796,7 @@ def rip_disc(cfg: dict, drive: dict) -> dict:
         st["message"] = f"continuing: {len(done)} done, {len(todo)} to rip"
     one_pass = len(todo) == len(listed) or (not resume and rip_all_cheaper(cfg, disc, todo, listed, scan_secs, out_dir))
     st["bytes_total"] = sum(t.get("size_bytes") or 0 for t in (listed if one_pass else todo))
+    st["bytes_base"] = bytes_kept(out_dir, listed if one_pass else todo)
     if one_pass:
         if len(todo) != len(listed):
             log(f"{device} [{label}] ripping every title in one pass and deleting the "
@@ -782,6 +832,7 @@ def rip_disc(cfg: dict, drive: dict) -> dict:
             st["message"] = f"retrying {len(bad)} title(s) that had read errors"
             last_pct[0] = -10
             st["bytes_total"] = sum(t.get("size_bytes") or 0 for t in bad)
+            st["bytes_base"] = bytes_kept(out_dir, bad)
             _, again = rip_each(bad)
             cancelled = st.get("cancel")
             still = [t for t in bad if not title_complete(cfg, out_dir / t["output_file"], t)]
@@ -895,17 +946,32 @@ def cancel(device: str) -> bool:
 # --------------------------------------------------------------------------- main
 
 def already_ripped(cfg: dict, label: str) -> str:
-    """Folder name of an earlier rip of this disc that's waiting for review (or filed), else ''."""
+    """Folder name of an earlier rip of this disc that's waiting for review (or filed), else ''.
+
+    A rip that saved nothing (the drive dropped out, every title failed) doesn't count, so
+    putting the disc back in rips it again instead of saying it's already done.
+    """
     root = Path(cfg["output_root"])
     prefix = safe_folder_name(label) + "__"
     for base in (root, root / "_Filed"):
         try:
             for d in base.iterdir():
                 if d.is_dir() and d.name.startswith(prefix) and (d / "disc_info.json").exists():
+                    if saved_nothing(d):
+                        continue
                     return d.name
         except OSError:
             pass
     return ""
+
+
+def saved_nothing(folder: Path) -> bool:
+    """True when this rip folder's disc_info.json says no title was saved and no MKV is there."""
+    try:
+        info = json.loads((folder / "disc_info.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False  # can't tell: treat as a real rip, the safe side for "don't rip twice"
+    return info.get("titles_saved") == 0 and not any(folder.glob("*.mkv"))
 
 
 ON_LOW_SPACE: list = []   # app.py: alert when a rip is held back for space

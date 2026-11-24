@@ -305,6 +305,34 @@ class RipDisc(unittest.TestCase):
         identify.skip_clutter([it])
         self.assertEqual(it["action"], "skip")
 
+    def test_repeated_playlist_names_are_numbered(self):
+        mk = lambda n: {"role": "extra", "action": "move", "dest_dir": "x", "category": "Featurettes", "name": n}
+        items = [mk("Ithaca"), mk("Ithaca"), mk("Battle Ready"), {**mk("Ithaca"), "action": "skip"}]
+        identify.number_repeats(items)
+        self.assertEqual([i["name"] for i in items], ["Ithaca (Part 1)", "Ithaca (Part 2)", "Battle Ready", "Ithaca"])
+
+    def test_rip_that_saved_nothing_is_not_already_ripped(self):
+        import json, tempfile
+        with tempfile.TemporaryDirectory() as root:
+            d = Path(root) / "GOT_S2__20261124-145526"
+            d.mkdir()
+            (d / "disc_info.json").write_text(json.dumps({"titles_saved": 0}))
+            self.assertEqual(rip_all.already_ripped({"output_root": root}, "GOT_S2"), "")
+            (d / "t00.mkv").write_bytes(b"x")
+            self.assertEqual(rip_all.already_ripped({"output_root": root}, "GOT_S2"), d.name)
+
+    def test_eject_ignores_anything_but_a_drive_letter(self):
+        calls = []
+        real = rip_all.subprocess.run
+        rip_all.subprocess.run = lambda *a, **k: calls.append(a[0])
+        try:
+            rip_all.eject("E:'); Remove-Item C:\\x; ('")
+            rip_all.eject("e:")
+        finally:
+            rip_all.subprocess.run = real
+        self.assertEqual(len(calls), 1)
+        self.assertIn("ParseName('E:')", calls[0][-1])
+
     def test_drive_lost_detection(self):
         self.assertTrue(rip_all.drive_lost('MSG:5010,0,0,"Failed to open disc","Failed to open disc"'))
         self.assertFalse(rip_all.drive_lost('MSG:2003,0,1,"Error \'Scsi error - MEDIUM ERROR\' occurred while reading"'))

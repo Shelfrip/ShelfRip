@@ -348,12 +348,13 @@ dialog.disc .fb .chk{display:flex;gap:8px;align-items:center;color:var(--ink)}
 
 <script>
 const CATS = ["Featurettes","Behind the Scenes","Deleted Scenes","Interviews","Scenes","Shorts","Trailers","Other"];
-let discs = [], LIB = "", LIB_RIPPED = "", SERVER = "plex", SERVER_NAME = "Plex";
+let discs = [], LIB = "", LIB_RIPPED = "", SERVER = "plex", SERVER_NAME = "Plex", EXTRAS_SUFFIX = false;
 // name parts the same way naming.py does for the chosen media server
 const idTag = id => !id ? "" : SERVER === "plex" ? ` {tmdb-${id}}` : SERVER === "jellyfin" ? ` [tmdbid-${id}]` : SERVER === "emby" ? ` [tmdbid=${id}]` : "";
 const editionName = (base, ed) => SERVER === "plex" ? `${base} {edition-${ed}}` : `${base} - ${ed}`;
 const $ = (s, el=document) => el.querySelector(s);
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// HTML-escape text before putting it in markup (single quotes too, for attributes written with ')
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const safe = s => String(s||"").replace(/\s*:\s*/g," - ").replace(/[<>"/\\|?*]/g,"").replace(/\s+/g," ").trim().replace(/[ .]+$/,"");
 
 async function api(path, body){
@@ -507,6 +508,8 @@ function destOf(p, it){
     return inLib(it.dest_dir).join("\\") + "\\" + safe(`${it.attach_to}-${SUFFIX[cat] || "other"}${same.length > 1 ? k + 1 : ""}`) + ".mkv";
   }
   const parts = inLib(it.dest_dir);
+  // mirrors review.dest_for: "Making Of-featurette.mkv" beside the film, or in a Featurettes folder
+  if (it.role === "extra" && EXTRAS_SUFFIX) return parts.join("\\") + "\\" + safe(`${it.name}-${SUFFIX[cat] || "other"}`) + ".mkv";
   if (it.role === "extra") parts.push(folder);
   return parts.join("\\") + "\\" + safe(it.name) + ".mkv";
 }
@@ -1058,7 +1061,7 @@ function poll(){
 
 async function load(keepEdits){
   const j = await api("/api/discs");
-  LIB = j.library; LIB_RIPPED = j.ripped; SERVER = j.server || "plex"; SERVER_NAME = j.server_name || "Plex";
+  LIB = j.library; LIB_RIPPED = j.ripped; SERVER = j.server || "plex"; SERVER_NAME = j.server_name || "Plex"; EXTRAS_SUFFIX = !!j.extras_suffix;
   $("#sub").textContent = `${j.discs.length} disc${j.discs.length === 1 ? "" : "s"} waiting` + (j.tmdb ? "" : " · no TMDB key"); $("#sub").title = `Library: ${LIB}`;
   if (keepEdits){ // only refresh job status, keep unsaved edits
     // Redraw just the cards whose filing status changed, so typing or a dropdown open on
@@ -1771,7 +1774,9 @@ function wireWizard(el){
   el.querySelectorAll("input[data-w]").forEach(i => {
     if (i.type === "checkbox") { i.onchange = () => save({[i.dataset.w]: i.checked}, true); return; }
     if (i.type === "text") i.onchange = () => save({[i.dataset.w]: i.value.trim()});
-    // saved while typing too, so closing Shelfrip mid-answer keeps it
+    // saved while typing too, so closing Shelfrip mid-answer keeps it. Not folder boxes: a
+    // half-typed path like "E:\\Ri" would be saved and could get created as a folder.
+    if (i.dataset.pickme) return;
     let t = 0;
     i.oninput = () => { clearTimeout(t); t = setTimeout(() => { const v = i.value.trim();
       if (i.type === "password" ? v : true) api("/api/settings", {values:{[i.dataset.w]: v}}).then(r => { SETS = r; }).catch(() => {}); }, i.type === "password" ? 1200 : 600); };

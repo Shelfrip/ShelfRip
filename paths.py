@@ -19,6 +19,8 @@ import json
 import os
 import shutil
 import sys
+import threading
+import time
 from pathlib import Path
 
 APP_NAME = "Shelfrip"
@@ -51,6 +53,32 @@ def _data_dir() -> Path:
 DATA_DIR = _data_dir()
 CONFIG_PATH = DATA_DIR / "config.json"
 CACHE_DIR = DATA_DIR / ".cache"
+
+# Several parts of the app write config.json (Settings, the setup wizard's autosave, the shared
+# database's install id, filled-in defaults). They all go through write_config under this lock,
+# each with its own temp file, so two saves at once can't lose each other's changes.
+CONFIG_LOCK = threading.RLock()
+
+
+def write_config(cfg: dict) -> None:
+    """Save the whole settings dict to config.json atomically (temp file, then rename).
+
+    Retries briefly when Windows reports the file busy (antivirus, backup tools), and raises
+    OSError if it still can't be replaced. Callers that read-modify-write hold CONFIG_LOCK.
+    """
+    with CONFIG_LOCK:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CONFIG_PATH.with_name(f"config.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        for attempt in range(5):
+            try:
+                tmp.replace(CONFIG_PATH)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    tmp.unlink(missing_ok=True)
+                    raise
+                time.sleep(0.2)
 
 # Files an older version kept next to the scripts.
 _OLD_FILES = ("config.json", "disc_catalog.db", "learned_labels.json")

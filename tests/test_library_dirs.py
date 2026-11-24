@@ -109,6 +109,31 @@ class LibraryDirs(unittest.TestCase):
         self.assertTrue(identify.EXTRA_TAGGED.search("Ithaca-behindthescenes"))
         self.assertFalse(identify.EXTRA_TAGGED.search("Film (2026) {tmdb-1}"))
 
+    def test_settings_saves_dont_lose_each_other(self):
+        import json
+        import threading
+        import app
+        import paths
+        import review
+        tmp = Path(tempfile.mkdtemp()) / "config.json"
+        saved = (paths.CONFIG_PATH, identify.CONFIG_PATH, review.reload_config, app.RIPPER)
+        try:
+            paths.CONFIG_PATH = identify.CONFIG_PATH = tmp
+            review.reload_config, app.RIPPER = (lambda: None), None
+            tmp.write_text('{"tmdb_api_key": "k", "output_root": "E:\\Ripped"', encoding="utf-8")  # cut off
+            app.save_settings({"notifications": False})
+            self.assertTrue((tmp.parent / "config.broken.json").exists())  # the unreadable one was kept
+            # the setup wizard saves several answers at once while you type
+            keys = [k for k, _, kind in app.SETTINGS if kind == "bool"][:6]
+            ts = [threading.Thread(target=app.save_settings, args=({k: True},)) for k in keys]
+            [t.start() for t in ts]
+            [t.join() for t in ts]
+            cfg = json.loads(tmp.read_text(encoding="utf-8"))
+            self.assertTrue(all(cfg.get(k) is True for k in keys), cfg)
+            self.assertEqual(list(tmp.parent.glob("*.tmp")), [])
+        finally:
+            paths.CONFIG_PATH, identify.CONFIG_PATH, review.reload_config, app.RIPPER = saved
+
 
 if __name__ == "__main__":
     unittest.main()

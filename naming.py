@@ -86,4 +86,4 @@ def episode_extras_inline(cfg: dict) -> bool:
 
 def page_info(cfg: dict) -> dict:
     """What the review page needs to build names the same way."""
-    return {"server": server(cfg), "server_name": server_name(cfg)}
+    return {"server": server(cfg), "server_name": server_name(cfg), "extras_suffix": extras_suffixed(cfg)}

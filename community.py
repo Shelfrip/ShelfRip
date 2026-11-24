@@ -2,12 +2,14 @@ r"""
 community.py - the shared Shelfrip disc database.
 
 When you file a disc (and "share_discs" is on), what you filed is sent to the database:
-the disc's fingerprint, and for each title its playlist, length, size and what it turned out
-to be (the movie, s01e03, the featurette "Making Of", a clip you skipped). For the titles that
-matter (kept ones, and every movie or episode candidate) its tracks go too: the video codec and
-size, each audio track's language, codec, channels and commentary name, and each subtitle's
-language and whether it's forced. Nothing else: no file paths, no folder names, no library
-details, no keys, no names of people using Shelfrip. Your install is identified only by a random
+the disc's fingerprint, its volume label and the name written on it, its format, what it is
+(the TMDB/IMDb id, title, year and season), the Shelfrip version, and for each title its
+playlist, length, size and what it turned out to be (the movie, s01e03, the featurette
+"Making Of", a clip you skipped). For the titles that matter (kept ones, and every movie or
+episode candidate) its tracks go too: the video codec and size, each audio track's language,
+codec, channels and commentary name, and each subtitle's language and whether it's forced.
+Nothing else: no file paths, no folder names, no library details, no keys, no names of people
+using Shelfrip. Your install is identified only by a random
 id (install_id in config.json), so repeat filings of the same disc replace each other instead of
 counting twice.
 
@@ -57,13 +59,12 @@ def install_id(cfg: dict) -> str:
         return iid
     iid = str(uuid.uuid4())
     try:
-        raw = json.loads(paths.CONFIG_PATH.read_text(encoding="utf-8-sig")) if paths.CONFIG_PATH.exists() else {}
-        raw["install_id"] = iid
-        tmp = paths.CONFIG_PATH.with_suffix(".tmp")
-        tmp.write_text(json.dumps(raw, indent=2), encoding="utf-8")
-        tmp.replace(paths.CONFIG_PATH)
-    except OSError:
-        pass
+        with paths.CONFIG_LOCK:
+            raw = json.loads(paths.CONFIG_PATH.read_text(encoding="utf-8-sig")) if paths.CONFIG_PATH.exists() else {}
+            raw["install_id"] = iid
+            paths.write_config(raw)
+    except (OSError, ValueError):
+        pass  # unreadable settings: use the id for this run only rather than overwrite them
     cfg["install_id"] = iid
     return iid
 
@@ -194,8 +195,13 @@ def note_shown(plan: dict, disc: dict) -> None:
     if not ca:
         return
     by_file = {t.get("output_file"): t for t in disc.get("titles", [])}
+    # Only titles the database had an answer for: a name Shelfrip guessed itself (TMDB, DVDCompare,
+    # the disc's playlist names) and filed unchanged isn't someone agreeing with the database.
+    known = set(ca["sources"]) if isinstance(ca.get("sources"), list) else None  # None: plans made before 1.1.0
     shown = {}
     for it in plan.get("items", []):
+        if known is not None and it.get("source") not in known:
+            continue
         row = _title_row(it, by_file.get(it.get("source"), {}))
         if row and it.get("source"):
             shown[it["source"]] = answer_key(row)

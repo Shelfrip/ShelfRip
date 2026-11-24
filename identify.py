@@ -110,6 +110,9 @@ FILL_IN = {"plex_url": "", "plex_token": ""}
 
 
 def load_config() -> dict:
+    """The defaults overlaid with config.json. A settings file that isn't valid JSON is
+    reported (raises) rather than silently ignored, since running with defaults would rip and
+    file into the wrong folders."""
     cfg = dict(DEFAULTS)
     if CONFIG_PATH.exists():
         mine = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
@@ -118,11 +121,12 @@ def load_config() -> dict:
             missing.update(eject_after_filing=True, eject_when_done=False)
         if missing:
             try:
+                with paths.CONFIG_LOCK:  # re-read under the lock so a save in between isn't lost
+                    fresh = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
+                    fresh.update({k: v for k, v in missing.items() if k not in fresh})
+                    paths.write_config(fresh)
                 mine.update(missing)
-                tmp = CONFIG_PATH.with_suffix(".tmp")
-                tmp.write_text(json.dumps(mine, indent=2), encoding="utf-8")
-                tmp.replace(CONFIG_PATH)
-            except OSError:
+            except (OSError, ValueError):
                 pass
         cfg.update(mine)
     return cfg
@@ -356,6 +360,8 @@ def library_dirs(cfg: dict, root: Path | None = None) -> dict:
 
 
 def index_library(root: Path, cfg: dict) -> dict:
+    """The movies and shows already in the library (title, year, TMDB id, folder), used to
+    spot copies you already have and to number episodes after the ones already there."""
     lib = {"movies": [], "shows": []}
     if not root.exists():
         print(f"  ! Plex library not reachable at {root}. Episode numbering will start at 1.")
@@ -405,6 +411,7 @@ EXTRA_TAGGED = re.compile(r"-(?:behindthescenes|deleted|deletedscene|featurette|
 
 
 def episodes_in_library(lib: dict, tmdb_id: str, title_norm: str, season: int) -> set[int]:
+    """Episode numbers of `season` already filed for this show (matched by TMDB id, else by name)."""
     eps: set[int] = set()
     for s in lib["shows"]:
         if (tmdb_id and s["id"] == str(tmdb_id)) or (not tmdb_id and s["norm"] == title_norm):
@@ -416,6 +423,8 @@ def episodes_in_library(lib: dict, tmdb_id: str, title_norm: str, season: int) -
 
 
 def episodes_claimed_by_plans(rip_root: Path, this_folder: Path, show_key: str, season: int) -> set[int]:
+    """Episode numbers of `season` other discs waiting for review already use, so two discs
+    of one season don't both get numbered from 1."""
     eps: set[int] = set()
     for p in rip_root.glob("*/plan.json"):
         if p.parent == this_folder:
@@ -610,6 +619,7 @@ def mark_library_copies(plan: dict, lib: dict, cfg: dict) -> None:
 # --------------------------------------------------------------------------- classification
 
 def disc_format(disc: dict) -> str:
+    """"4k", "bluray" or "dvd", from the widest video stream on the disc."""
     width = 0
     for t in disc["titles"]:
         for s in t.get("streams", []):
@@ -651,6 +661,8 @@ def mark_duplicates(titles: list[dict]) -> None:
 
 
 def looks_like_tv(titles: list[dict], label_info: dict, lib_show: dict | None) -> bool:
+    """Is this a TV disc? Yes if the label names a season or the show is in the library;
+    otherwise judged from the run times (several similar episode-length titles, no feature)."""
     if label_info["season"] is not None or lib_show:
         return True
     longs = [t["duration_seconds"] for t in titles if t["duration_seconds"] >= 15 * 60]
@@ -720,6 +732,8 @@ def authored_name(t: dict, disc: dict | None = None) -> tuple[str, str] | None:
 
 
 def extra_item(t: dict, idx: int, base_dir: str, cfg: dict, disc: dict | None = None) -> dict:
+    """A plan item for a bonus title: "Extra 01 (4m10s)", or a name read from the disc's own
+    playlist name. Duplicates and very short clips start as skipped."""
     d = t["duration_seconds"]
     item = {
         "source": t["output_file"], "duration": t.get("duration"), "duration_seconds": d,
@@ -739,6 +753,20 @@ def extra_item(t: dict, idx: int, base_dir: str, cfg: dict, disc: dict | None = 
             item.update(name=got[0], category=got[1], note="named from the disc's own playlist name")
     item["dest_dir"] = base_dir
     return item
+
+
+def number_repeats(items: list[dict]) -> None:
+    """Extras named from the disc's playlist names can repeat (a studio's "Ithaca" segment in
+    three parts drops its numbers). Two files with one name can't be filed into the same folder,
+    so repeats become "Name (Part 1)", "Name (Part 2)", in disc order."""
+    groups: dict[tuple, list[dict]] = {}
+    for it in items:
+        if it.get("role") == "extra" and it.get("action") == "move":
+            groups.setdefault((it.get("dest_dir"), it.get("category"), it["name"].lower()), []).append(it)
+    for same in groups.values():
+        if len(same) > 1:
+            for k, it in enumerate(same, 1):
+                it["name"] = f"{it['name']} (Part {k})"
 
 
 def name_editions(items: list[dict], base: str, tmdb_min: int, label: str, warnings: list[str],
@@ -925,6 +953,7 @@ def plan_movie(folder: Path, disc: dict, titles: list[dict], label_info: dict,
         items.append(item)
     name_editions(items, f"{base_name}{tag}", (match or {}).get("runtime") or 0,
                   f"{disc.get('disc_label', '')} {disc.get('name', '')}", warnings, cfg)
+    number_repeats(items)
     return {
         "kind": "movie", "title": title, "year": year, "tmdb_id": tid,
         "format": fmt_folder, "library_dir": movie_dir, "items": items,
@@ -1140,6 +1169,7 @@ def plan_tv(folder: Path, rip_root: Path, disc: dict, titles: list[dict], label_
         n += item["action"] != "skip"
         items.append(item)
 
+    number_repeats(items)
     if not episode_titles:
         warnings.append("No episode-length titles found. This may be a bonus disc.")
     if any(i.get("needs_split") for i in items):
@@ -1197,6 +1227,8 @@ def _same_length_run(it, extras) -> bool:
 
 
 def skip_clutter(items: list[dict], title: str = "") -> None:
+    """Set extras that look like menus, warnings, promos or ads for other films to Skip (with a
+    note saying why), so only real special features get filed."""
     extras = [it for it in items if it.get("role") == "extra" and it.get("action") == "move"]
     own = _title_words(title)
     for it in extras:
@@ -1334,7 +1366,8 @@ def plan_folder(folder: Path, rip_root: Path, tmdb: TMDB | None, lib: dict, cfg:
         apply_discdb(plan, known, tmdb)
         if known.get("community"):  # remembered, so a correction can be reported back
             plan["community_answer"] = {"kind": known["kind"], "tmdb_id": known["tmdb_id"], "season": known.get("season"),
-                                        "title": known.get("title")}
+                                        "title": known.get("title"),
+                                        "sources": sorted(known.get("pairs") or {})}  # titles the database knew
         if known.get("community") and not known.get("confirmed"):
             plan["warnings"].append("Only one person has shared this disc with the Shelfrip disc database so far: "
                             "check the names before filing.")
