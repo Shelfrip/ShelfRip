@@ -357,6 +357,33 @@ class RipDisc(unittest.TestCase):
         it = plan["items"][0]
         self.assertEqual((it["action"], it["name"]), ("skip", "Menu Background"))
 
+    def test_bonus_disc_is_all_extras(self):
+        class TMDB:
+            def search(self, kind, q):
+                return [{"id": 607, "title": "Men in Black", "release_date": "1997-07-02", "popularity": 1}]
+
+            def movie(self, mid):
+                return {"id": 607, "title": "Men in Black", "release_date": "1997-07-02", "runtime": 98}
+        titles = [{"title_id": i, "output_file": f"t{i:02d}.mkv", "duration_seconds": d, "duration": ""}
+                  for i, d in enumerate((1380, 600, 300))]
+        disc = {"disc_label": "MEN_IN_BLACK", "titles": titles}
+        cfg = {**identify.DEFAULTS, "skip_extras_under_seconds": 30}
+        warnings = []
+        plan = identify.plan_movie(Path("x"), disc, titles, identify.parse_label("MEN_IN_BLACK"), TMDB(),
+                                   {"movies": [], "shows": []}, cfg, warnings)
+        self.assertTrue(plan["bonus_disc"])
+        self.assertEqual({i["role"] for i in plan["items"]}, {"extra"})
+        self.assertEqual([i["action"] for i in plan["items"]], ["move"] * 3)
+        self.assertTrue(any("bonus disc" in w for w in warnings))
+        self.assertFalse(any("wrong movie" in w for w in warnings))
+
+    def test_skipped_copies_name_what_they_copy(self):
+        items = [{"source": "a", "role": "extra", "name": "Tunnel Scene", "action": "move"},
+                 {"source": "b", "role": "extra", "name": "Probably a Copy (1m31s, t12)", "action": "skip",
+                  "note": "same length as a (duplicate)"}]
+        identify.name_copies(items)
+        self.assertEqual(items[1]["name"], "Probably a Copy of Tunnel Scene")
+
     def test_drive_lost_detection(self):
         self.assertTrue(rip_all.drive_lost('MSG:5010,0,0,"Failed to open disc","Failed to open disc"'))
         self.assertFalse(rip_all.drive_lost('MSG:2003,0,1,"Error \'Scsi error - MEDIUM ERROR\' occurred while reading"'))

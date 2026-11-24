@@ -264,6 +264,10 @@ def dvdcompare_candidates(movie_title: str, year: str, fmt: str, durations: list
                 score += 3
             if re.search(r"america|\bus\b|region a|\br1\b", name):
                 score += 1
+            # a film page can list other formats' releases too: a DVD's extras come from a DVD release
+            other_fmt = ("blu-ray" in name or "4k" in name) if fmt == "dvd" else name.startswith("dvd")
+            if other_fmt:
+                score -= 2
             longs = [f for f in feats if f["seconds"] >= 60]
             hit = [f for f in longs if any(abs(f["seconds"] - d) <= TOLERANCE for d in durations)]
             coverage = len(hit) / len(longs) if longs else 0.0
@@ -432,7 +436,8 @@ def _assign(todo: list[dict], dvdc: dict) -> int:
             name = f"{name} (All)"
         key = id(f)
         if key in used:  # a second title matching the same extra is almost always a copy
-            it.update(action="skip", note=f"looks like a copy of {used_by[key]} ({name})")
+            copy = f"Probably a Copy of {name}"  # skipped, but still says what it is
+            it.update(action="skip", name=copy, dvdc_name=copy, note=f"looks like a copy of {used_by[key]} ({name})")
             continue
         used[key] = 1
         used_by[key] = it["source"]

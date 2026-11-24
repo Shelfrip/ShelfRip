@@ -496,17 +496,22 @@ FORMAT_OF_RANK = {1: "DVD", 2: "Blu-ray", 3: "4K"}
 VIDEO_EXT = (".mkv", ".mp4", ".avi", ".m4v", ".ts", ".m2ts")
 
 
+def library_folders(plan: dict, lib: dict) -> list[dict]:
+    """The library's folders for this plan's film or show: by TMDB id, else by title (and year)."""
+    tid = str(plan.get("tmdb_id") or "")
+    t_norm, year = norm(plan.get("title") or ""), str(plan.get("year") or "")
+    return [x for x in lib.get("shows" if plan.get("kind") == "tv" else "movies", [])
+            if (tid and x["id_src"] == "tmdb" and x["id"] == tid)
+            or (x["norm"] == t_norm and (not year or not x["year"] or x["year"] == year))]
+
+
 def library_copies(plan: dict, lib: dict, cfg: dict) -> dict[str, list[dict]]:
     """What the library already has of each movie / episode in this plan, in any format folder.
 
     Returns {item source: [{"path", "format", "rank"}]} for main features, other versions and
     episodes. Matches by TMDB id in the folder name, else by title (and year)."""
     tv = plan.get("kind") == "tv"
-    tid = str(plan.get("tmdb_id") or "")
-    t_norm, year = norm(plan.get("title") or ""), str(plan.get("year") or "")
-    folders = [x for x in lib.get("shows" if tv else "movies", [])
-               if (tid and x["id_src"] == "tmdb" and x["id"] == tid)
-               or (x["norm"] == t_norm and (not year or not x["year"] or x["year"] == year))]
+    folders = library_folders(plan, lib)
     out: dict[str, list[dict]] = {}
     if not folders:
         return out
@@ -592,11 +597,16 @@ def mark_library_copies(plan: dict, lib: dict, cfg: dict) -> None:
                                    f"filing if you don't want both", it.get("note")) if x)
             upgrades += 1
     main = next((it for it in plan["items"] if it.get("role") == "main"), None)
+    parent = None
     if plan.get("kind") == "movie" and main and main.get("action") == "skip" and copies.get(main["source"]):
         # the movie stays as it is in Plex; send this disc's extras to that movie's folder
-        best = max(copies[main["source"]], key=lambda h: h["rank"])
+        parent = Path(max(copies[main["source"]], key=lambda h: h["rank"])["path"]).parent
+    elif plan.get("kind") == "movie" and plan.get("bonus_disc"):
+        # a bonus disc: its extras join the film already in the library (best-quality copy's folder)
+        have = sorted(library_folders(plan, lib), key=lambda f: quality_rank(f.get("format_folder") or "", cfg), reverse=True)
+        parent = have[0]["folder"] if have else None
+    if parent is not None:
         try:
-            parent = Path(best["path"]).parent
             try:
                 rel = str(parent.relative_to(Path(cfg["plex_library_root"]))).replace("/", "\\")
             except ValueError:  # a Movies folder kept outside the media library
@@ -606,7 +616,7 @@ def mark_library_copies(plan: dict, lib: dict, cfg: dict) -> None:
                 it["dest_dir"] = rel
             if any(it.get("action") == "move" for it in plan["items"]):
                 plan.setdefault("warnings", []).append(f"Extras will go into the movie's existing folder ({rel}).")
-        except ValueError:
+        except (ValueError, KeyError):
             pass
     if skipped:
         plan.setdefault("warnings", []).append(
@@ -729,6 +739,26 @@ def authored_name(t: dict, disc: dict | None = None) -> tuple[str, str] | None:
         import extras
         kind = extras.guess_category(name)
     return name, kind
+
+
+def name_copies(items: list[dict]) -> None:
+    """"Probably a Copy (1m31s, t12)" becomes "Probably a Copy of Tunnel Scene" once the title it
+    copies has a real name, so a skipped copy says what it is."""
+    by_src = {it.get("source"): it for it in items}
+    for it in items:
+        m = re.fullmatch(r"same length as (\S+) \(duplicate\)", str(it.get("note") or ""))
+        if not (m and it.get("action") == "skip" and str(it.get("name") or "").startswith("Probably a Copy (")):
+            continue
+        other = by_src.get(m.group(1)) or {}
+        twin = "the Movie" if other.get("role") in ("main", "edition") else str(other.get("name") or "")
+        if twin and not PLACEHOLDER.match(twin):
+            it["name"] = f"Probably a Copy of {twin}"
+
+
+def bonus_disc(longest_min: float, film_min: float) -> bool:
+    """A disc of special features for a film (a collector's edition's second disc): even its longest
+    title is under an hour and less than half the film's length, so none of it is the film."""
+    return bool(film_min) and longest_min < 60 and longest_min < 0.5 * film_min
 
 
 def extra_item(t: dict, idx: int, base_dir: str, cfg: dict, disc: dict | None = None) -> dict:
@@ -884,7 +914,10 @@ def plan_movie(folder: Path, disc: dict, titles: list[dict], label_info: dict,
         title, year, tid = label_info["query"] or disc.get("disc_label", "Unknown"), "", ""
     else:
         title, year, tid = match["title"], year_of(match.get("release_date")), str(match["id"])
-        if match.get("runtime") and abs(match["runtime"] - main_min) > 6:
+        if bonus_disc(main_min, match.get("runtime") or 0):
+            warnings.append(f"This looks like a bonus disc: its longest title is {main_min:.0f} min and the film is "
+                            f"{match['runtime']} min, so everything on it is treated as extras.")
+        elif match.get("runtime") and abs(match["runtime"] - main_min) > 6:
             warnings.append(f"Possibly the wrong movie: the disc's movie is {main_min:.0f} min, but TMDB says "
                             f"{match['title']} ({year}) is {match['runtime']} min. Check the cover, or pick the right one.")
         elif not match.get("runtime") and not label_info.get("force_id"):
@@ -927,17 +960,18 @@ def plan_movie(folder: Path, disc: dict, titles: list[dict], label_info: dict,
         if tid and m["id"] == tid:
             warnings.append("Already in library: " + "\\".join(x for x in (m["format_folder"], m["folder_name"]) if x))
 
-    items = [{
+    bonus = bool(match) and bonus_disc(main_min, match.get("runtime") or 0)
+    items = [] if bonus else [{
         "source": main["output_file"], "duration": main.get("duration"),
         "duration_seconds": main["duration_seconds"], "role": "main",
         "dest_dir": movie_dir, "name": f"{base_name}{tag}", "action": "move", "note": "main feature",
     }]
     n = 0
     for t in sorted(titles, key=lambda t: t["title_id"]):
-        if t is main:
+        if t is main and not bonus:
             continue
         d = t["duration_seconds"]
-        if d >= 0.9 * main["duration_seconds"]:
+        if not bonus and d >= 0.9 * main["duration_seconds"]:
             same = abs(d - main["duration_seconds"]) <= 60
             items.append({
                 "source": t["output_file"], "duration": t.get("duration"), "duration_seconds": d,
@@ -958,6 +992,7 @@ def plan_movie(folder: Path, disc: dict, titles: list[dict], label_info: dict,
     return {
         "kind": "movie", "title": title, "year": year, "tmdb_id": tid,
         "format": fmt_folder, "library_dir": movie_dir, "items": items,
+        **({"bonus_disc": True} if bonus else {}),
         **({"match_source": checked} if checked else {}),
         "tmdb_candidates": [{"id": c["id"], "title": c.get("title"), "year": year_of(c.get("release_date")),
                              "runtime": c.get("runtime")} for c in candidates[:6]],
@@ -1393,7 +1428,8 @@ def plan_folder(folder: Path, rip_root: Path, tmdb: TMDB | None, lib: dict, cfg:
             print(f"    (couldn't look up extras names: {exc})")
     for it in plan["items"]:
         if it.get("role") == "extra" and it.get("name") and not PLACEHOLDER.match(it["name"]):
-            it["name"] = capital_case(it["name"])  # Shelfrip's own "Probably a Copy (…, t03)" stays as written
+            it["name"] = capital_case(it["name"])
+    name_copies(plan["items"])  # Shelfrip's own "Probably a Copy (…, t03)" stays as written
     if cfg.get("skip_clutter", True):
         skip_clutter(plan["items"], plan.get("title") or "")
         try:
