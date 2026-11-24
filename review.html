@@ -188,7 +188,7 @@ pre.log{background:var(--card);border:1px solid var(--line);border-radius:14px;p
 .wz-field input[data-pickme]:placeholder-shown,input.pickme:placeholder-shown{cursor:pointer}
 .wz-field button{padding:10px 14px}
 .wz-status{max-width:520px;margin:8px auto 0;font-size:13px;color:var(--err);word-break:break-word}
-.wz-status.ok{color:var(--ok)}.wz-status.soft{color:var(--muted)}
+.wz-status.ok{color:var(--ok)}.wz-status.warnline{color:var(--warn)}.wz-status.soft{color:var(--muted)}
 .wz-chk{display:flex;gap:8px;align-items:center;justify-content:center;margin:12px auto 0;font-size:13px;color:var(--muted)}
 .wz-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;max-width:540px;margin:16px auto 4px}
 .wz-tile{display:grid;justify-items:center;gap:6px;padding:16px 12px;border-radius:16px;background:var(--card2);border:2px solid var(--line2);transition:transform .12s,border-color .12s}
@@ -214,6 +214,7 @@ button.linkish{background:none;border:none;color:var(--accent);padding:4px 6px;t
 @media (prefers-reduced-motion: reduce){.wz-step,.wz-art i{animation:none}.wz-tile{transition:none}}
 @media (max-width:560px){.wz{padding:18px 16px}.wz-field{flex-direction:column}.wz-top{flex-direction:column;align-items:flex-start}}
 .hide{display:none!important}
+.warnline{color:var(--warn)}
 .aud{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;margin-top:6px;font-size:12px;color:var(--muted)}
 .aud .trk{border:1px solid var(--line2);border-radius:12px;padding:1px 8px;cursor:pointer;background:var(--card);color:var(--muted);font-size:12px}
 .aud .trk.com{border-color:var(--accent);color:var(--ink)}
@@ -1294,6 +1295,7 @@ function renderDrives(j){
   const logOpen = $("details.log", el) && $("details.log", el).open;
   el.innerHTML = `
     ${missing.length ? setupBox(missing, "Needs setting up:") : j.error ? `<div class="warn" style="margin-bottom:14px">${esc(j.error)}</div>` : ""}
+    ${(j.setup||[]).filter(x => x.warn).map(x => `<div class="warn" style="margin-bottom:14px"><b>${esc(x.name)}:</b> ${esc(x.warn)} <a href="#settings" data-gosettings>Change it in Settings</a></div>`).join("")}
     ${j.makemkv_open ? `<div class="warn" style="margin-bottom:14px"><b>MakeMKV's window is open.</b> Close it while Shelfrip rips:
       MakeMKV can hold on to the drives it shows, and two programs reading the same disc make rips much slower, or fail as if the disc were scratched.</div>` : ""}
     ${j.leftover_makemkv ? `<div class="warn" style="margin-bottom:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span style="flex:1 1 360px"><b>MakeMKV is still running from before Shelfrip started</b> (${j.leftover_makemkv} cop${j.leftover_makemkv === 1 ? "y" : "ies"}).
@@ -1339,6 +1341,10 @@ async function ripAct(action, device){
 }
 let drivesTimer = null;
 let BOOT = "";
+document.addEventListener("click", e => {  // "Change it in Settings" links in warnings
+  const a = e.target.closest && e.target.closest("[data-gosettings]");
+  if (a){ e.preventDefault(); showTab("settings"); }
+});
 async function pollDrives(){
   clearTimeout(drivesTimer);
   try {
@@ -1621,6 +1627,7 @@ function wzStatus(name){
   if (!c.name) return "";
   // "not chosen yet" / "not set" just repeat the question: say nothing until there's an answer to judge
   if (!c.ok && /^not (chosen|set)/i.test(c.detail || "")) return "";
+  if (c.ok && c.warn) return `<div class="wz-status warnline" id="wzst">⚠ ${esc(c.warn)}</div>`;
   return `<div class="wz-status ${c.ok ? "ok" : c.required ? "" : "soft"}" id="wzst">${c.ok ? "✓ " : ""}${esc(c.ok ? (c.detail || "Done") : (c.detail || "Not done yet"))}</div>`;
 }
 function wzFolder(key, name, ph){
@@ -1872,7 +1879,7 @@ function setField(row, meta){
   const st = SET_STATUS[key] ? statusOf(SET_STATUS[key]) : null;
   const flag = st && st.name ? `<span class="chip ${st.ok ? "good" : st.required ? "warnc" : ""}">${st.ok ? "✓ found" : st.required ? "needed" : "not found"}</span>` : "";
   const link = o.link ? `<a href="${esc(o.link)}" target="_blank" rel="noopener">${esc(o.linkText || "More")}</a>` : "";
-  const helpHtml = (help || link || (st && !st.ok && st.detail)) ? `<div class="help">${esc(help)}${help && link ? " " : ""}${link}${st && !st.ok && st.detail && row.kind !== "secret" ? `<div class="${st.required ? "err" : ""}">${esc(st.detail)}${st.link && !o.link ? ` · <a href="${esc(st.link)}" target="_blank" rel="noopener">Download</a>` : ""}</div>` : ""}</div>` : "";
+  const helpHtml = (help || link || (st && !st.ok && st.detail) || (st && st.warn)) ? `<div class="help">${esc(help)}${help && link ? " " : ""}${link}${st && !st.ok && st.detail && row.kind !== "secret" ? `<div class="${st.required ? "err" : ""}">${esc(st.detail)}${st.link && !o.link ? ` · <a href="${esc(st.link)}" target="_blank" rel="noopener">Download</a>` : ""}</div>` : ""}${st && st.ok && st.warn ? `<div class="warnline">⚠ ${esc(st.warn)}</div>` : ""}</div>` : "";
   if (row.kind === "bool") return `<div class="srow sw"><div class="lbl"><label for="${id}">${esc(label)}</label>${helpHtml}</div>
       <label class="switch bare"><input type="checkbox" id="${id}" data-k="${key}" ${v ? "checked" : ""}><span class="tog"></span><span class="sr">${esc(label)}</span></label><span class="saved" data-saved="${key}"></span></div>`;
   let ctl;

@@ -15,6 +15,7 @@ import discs  # noqa: E402
 
 TMP = discs.setup_env({"tmdb_api_key": "", "use_community": False, "use_thediscdb": False})
 import dupes  # noqa: E402
+import identify  # noqa: E402
 import rip_all  # noqa: E402
 
 ENG51 = {"type": "Audio", "lang3": "eng", "codec": "DTS-HD MA", "channels": 6}
@@ -286,6 +287,23 @@ class RipDisc(unittest.TestCase):
         self.assertTrue(info.get("drive_lost"))
         self.assertEqual(info["status"], "check")
         self.assertIn("disconnected", info["makemkv_error"])
+
+    def test_authored_playlist_names(self):
+        d = {"disc_label": "SPECIAL_FEATURES", "name": "Special Features"}
+        name = lambda f: identify.authored_name({"output_file": f}, d)
+        self.assertEqual(name("Special Features-SEG_01_BTS_08_BattleReady_t12.mkv"), ("Battle Ready", "Behind the Scenes"))
+        self.assertEqual(name("Special Features-SF_02_Trls_02_IMAX_NCR_t18.mkv"), ("IMAX Trailer", "Trailers"))
+        self.assertEqual(name("Special Features-SF_03_Extras_01_MusicVideo_t22.mkv"), ("Music Video", "Other"))
+        self.assertEqual(name("Special Features-SF_01_BTS_00_PlayAll_t25.mkv")[0], "Play All")
+        self.assertEqual(name("Special Features-Uni_ScreenSaver_t02.mkv")[0], "Screen Saver")
+        self.assertIsNone(name("SPECIAL_FEATURES_t03.mkv"))  # MakeMKV's usual disc-name file: nothing to read
+        self.assertIsNone(identify.authored_name({"output_file": "THE_MATRIX_t01.mkv"}, {"disc_label": "MATRIX"}))
+        # used for unnamed extras, and the menu / screensaver are then skipped as clutter
+        t = {"output_file": "Special Features-Uni_ScreenSaver_t02.mkv", "duration_seconds": 300, "duration": "0:05:00", "title_id": 2}
+        it = identify.extra_item(t, 1, "x", {**identify.DEFAULTS, "skip_extras_under_seconds": 30}, d)
+        self.assertEqual(it["name"], "Screen Saver")
+        identify.skip_clutter([it])
+        self.assertEqual(it["action"], "skip")
 
     def test_drive_lost_detection(self):
         self.assertTrue(rip_all.drive_lost('MSG:5010,0,0,"Failed to open disc","Failed to open disc"'))

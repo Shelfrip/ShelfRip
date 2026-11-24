@@ -80,6 +80,16 @@ class LibraryDirs(unittest.TestCase):
         self.assertEqual(music.music_root({"plex_library_root": str(lib("music"))}).name, "music")
         self.assertEqual(str(music.music_root({"plex_library_root": str(lib()), "music_library_root": r"M:\Audio"})), r"M:\Audio")
 
+    def test_rip_folder_inside_library(self):
+        import app
+        root = lib("Movies")
+        cfg = {"plex_library_root": str(root)}
+        self.assertEqual(app.rip_folder_in_library(str(root / "Ripped"), cfg), str(root))
+        self.assertEqual(app.rip_folder_in_library(str(root), cfg), str(root))
+        self.assertEqual(app.rip_folder_in_library(str(root.parent / "Ripped"), cfg), "")
+        self.assertEqual(app.rip_folder_in_library(str(root) + "-rips", cfg), "")  # same prefix, different folder
+        self.assertEqual(app.rip_folder_in_library(str(root / "x"), {}), "")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -661,7 +661,59 @@ def looks_like_tv(titles: list[dict], label_info: dict, lib_show: dict | None) -
 
 # --------------------------------------------------------------------------- planners
 
-def extra_item(t: dict, idx: int, base_dir: str, cfg: dict) -> dict:
+# Studios sometimes give each playlist a descriptive name that MakeMKV puts in the file name, e.g.
+# "Special Features-SEG_01_BTS_07_Ithaca_t11.mkv" or "SF_02_Trls_03_Trailer1_NCR". Known tags say
+# what kind of extra it is; the words left over are its name.
+AUTHORED_KIND = {
+    "bts": "Behind the Scenes", "behindthescenes": "Behind the Scenes", "making": "Behind the Scenes",
+    "trl": "Trailers", "trls": "Trailers", "trailer": "Trailers", "trailers": "Trailers", "teaser": "Trailers",
+    "del": "Deleted Scenes", "deleted": "Deleted Scenes", "delscn": "Deleted Scenes",
+    "int": "Interviews", "interview": "Interviews", "interviews": "Interviews",
+    "fea": "Featurettes", "feat": "Featurettes", "featurette": "Featurettes", "featurettes": "Featurettes",
+    "musicvideo": "Other", "gag": "Other", "gagreel": "Other", "bloopers": "Other",
+}
+AUTHORED_NOISE = {"seg", "sf", "tmpl", "ncr", "uni", "extras", "extra", "bonus", "pl", "mpls", "hd", "uhd", "sdr", "hdr"}
+
+
+def authored_name(t: dict, disc: dict | None = None) -> tuple[str, str] | None:
+    """(name, category) from a playlist name the studio wrote, or None when the file name is just
+    the disc's own name (MakeMKV's usual DISC_LABEL_t03.mkv) or says nothing useful."""
+    stem = re.sub(r"_t\d+$", "", Path(str(t.get("output_file") or "")).stem)
+    part = stem.split("-", 1)[1] if "-" in stem and " " in stem.split("-", 1)[0] else stem
+    flat = lambda x: re.sub(r"[^a-z0-9]", "", str(x or "").lower())
+    if not part or flat(part) in {flat((disc or {}).get("disc_label")), flat((disc or {}).get("name")), flat((disc or {}).get("volume_label"))}:
+        return None
+    toks = [x for x in re.split(r"[_\s.]+", part) if x]
+    if len(toks) < 2:  # one word, like the disc's own name: no structure to read
+        return None
+    kind, words = "", []
+    for tok in toks:
+        low = tok.lower()
+        if low in AUTHORED_KIND:
+            kind = kind or AUTHORED_KIND[low]
+            if low in ("teaser", "trailer", "musicvideo"):
+                words.append(tok)
+            continue
+        if low in AUTHORED_NOISE or re.fullmatch(r"\d+|t\d+", low):
+            continue
+        words.append(tok)
+    marked = any(x.lower() in ("seg", "sf", "extras", "bonus", "tmpl") for x in toks)  # a studio's bonus-menu naming
+    if not words or not (kind or marked or any(re.search(r"playall|menu|screensaver", w, re.I) for w in words)):
+        return None  # no tag we know: don't guess a name from it
+    spaced = lambda w: re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Za-z])(?=\d)", " ", w)
+    name = " ".join(spaced(w) for w in words)
+    name = re.sub(r"\bPlay All\b|\bPlayall\b", "Play All", name, flags=re.I)
+    name = re.sub(r"\bScreen Saver\b|\bScreensaver\b", "Screen Saver", name, flags=re.I)
+    name = " ".join(w if w.isupper() and len(w) > 1 else w[:1].upper() + w[1:] for w in name.split())
+    if kind == "Trailers" and not re.search(r"trailer|teaser", name, re.I):
+        name += " Trailer"
+    if not kind:
+        import extras
+        kind = extras.guess_category(name)
+    return name, kind
+
+
+def extra_item(t: dict, idx: int, base_dir: str, cfg: dict, disc: dict | None = None) -> dict:
     d = t["duration_seconds"]
     item = {
         "source": t["output_file"], "duration": t.get("duration"), "duration_seconds": d,
@@ -675,6 +727,10 @@ def extra_item(t: dict, idx: int, base_dir: str, cfg: dict) -> dict:
     elif d < cfg["skip_extras_under_seconds"]:
         item.update(action="skip", name=f"Unused clip ({mmss(d)}, t{t['title_id']:02d})",
                     note="very short: probably a logo, menu or promo")
+    else:
+        got = authored_name(t, disc)
+        if got:
+            item.update(name=got[0], category=got[1], note="named from the disc's own playlist name")
     item["dest_dir"] = base_dir
     return item
 
@@ -858,7 +914,7 @@ def plan_movie(folder: Path, disc: dict, titles: list[dict], label_info: dict,
                          "another cut of the film: set the edition name"),
             })
             continue
-        item = extra_item(t, n + 1, movie_dir, cfg)
+        item = extra_item(t, n + 1, movie_dir, cfg, disc)
         n += item["action"] != "skip"
         items.append(item)
     name_editions(items, f"{base_name}{tag}", (match or {}).get("runtime") or 0,
@@ -1071,7 +1127,7 @@ def plan_tv(folder: Path, rip_root: Path, disc: dict, titles: list[dict], label_
                           "dest_dir": season_dir, "name": "", "action": "skip",
                           "note": notes[t["output_file"]]})
             continue
-        item = extra_item(t, n + 1, season_dir, cfg)
+        item = extra_item(t, n + 1, season_dir, cfg, disc)
         if t["output_file"] in odd:
             item["category"] = "Featurettes"
             item["note"] = odd[t["output_file"]]
@@ -1096,7 +1152,7 @@ def plan_tv(folder: Path, rip_root: Path, disc: dict, titles: list[dict], label_
 # What people skip, learned from real filings: menus, warnings and logos; clips too short to be
 # anything that nobody could name; and "Play All" titles whose pieces are kept anyway.
 CLUTTER = re.compile(r"\b(menu|copyright|fbi|piracy|warning|(disc|bonus features?) credits|easter egg|digital copy|"
-                     r"sneak peeks?|previews|promo|disneyparks(\.com)?|logo)\b", re.I)
+                     r"sneak peeks?|previews|promo|disneyparks(\.com)?|logo|screen ?saver)\b", re.I)
 PLACEHOLDER = re.compile(r"^(Extra \d+|Unused clip) \(", re.I)
 PLAY_ALL = re.compile(r"play all|\((all|play all)\)|\s-\s+all\b", re.I)
 

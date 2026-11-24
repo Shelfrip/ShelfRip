@@ -717,6 +717,20 @@ def rips_in_progress(root) -> list[dict]:
     return out
 
 
+def rip_folder_in_library(rip: str, cfg: dict) -> str:
+    """The library folder the rip folder sits in (Plex would scan the raw rips), else ''."""
+    def norm(x: str) -> str:
+        return os.path.normcase(os.path.abspath(str(x).rstrip("\\/"))) if str(x or "").strip() else ""
+    r = norm(rip)
+    lib = str(cfg.get("plex_library_root") or "").strip()
+    places = [lib] + [str(cfg.get(k) or "") for k in ("movies_folder", "tv_folder") if identify.is_full_path(str(cfg.get(k) or ""))]
+    for place in places:
+        q = norm(place)
+        if q and r and (r == q or r.startswith(q.rstrip("\\/") + os.sep)):
+            return place
+    return ""
+
+
 def setup_check() -> list[dict]:
     """What the app needs, whether it's there, and where to get it if not."""
     import split
@@ -726,8 +740,15 @@ def setup_check() -> list[dict]:
                             ("plex_library_root", "Media library folder", "the folder holding your Movies and TV Shows folders")):
         p = str(cfg.get(key) or "").strip()
         ok = bool(p) and (os.path.isdir(p) or (key == "output_root" and os.path.isdir(os.path.dirname(p.rstrip("\\/")) or "")))
-        out.append({"name": name, "ok": ok, "required": True, "link": "",
-                    "detail": p if ok else (f"{p} doesn't exist (or isn't connected)" if p else f"not chosen yet: {what}")})
+        row = {"name": name, "ok": ok, "required": True, "link": "",
+               "detail": p if ok else (f"{p} doesn't exist (or isn't connected)" if p else f"not chosen yet: {what}")}
+        if key == "output_root" and p:
+            inside = rip_folder_in_library(p, cfg)
+            if inside:
+                row["warn"] = (f"This is inside your media library ({inside}), so Plex will pick up the raw rips "
+                               f"as extra movies. Choose a folder outside it, for example "
+                               f"{os.path.splitdrive(p)[0] or 'D:'}\\Ripped.")
+        out.append(row)
     mk = rip_all.find_makemkv(cfg)
     row = {"name": "MakeMKV", "ok": bool(mk), "detail": mk or "not installed: needed to rip discs",
            "link": "" if mk else rip_all.MAKEMKV_URL, "required": True}
