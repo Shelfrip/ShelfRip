@@ -102,7 +102,7 @@ NOISE_WORDS = {
 
 # --------------------------------------------------------------------------- utils
 
-PLANNER_VERSION = 9  # bump when naming improves, so untouched proposals get redone
+PLANNER_VERSION = 10  # bump when naming improves, so untouched proposals get redone
 
 
 # Settings you fill in yourself: added to config.json (empty) if they're missing, so you can see where they go
@@ -741,11 +741,12 @@ def extra_item(t: dict, idx: int, base_dir: str, cfg: dict, disc: dict | None = 
         "name": f"Extra {idx:02d} ({mmss(d)})",
         "action": "move", "note": "",
     }
+    # skipped titles still get a name saying what they probably are, so you can tell at a glance
     if t.get("_duplicate_of"):
-        item.update(action="skip", name=f"Unused clip ({mmss(d)}, t{t['title_id']:02d})",
+        item.update(action="skip", name=f"Probably a Copy ({mmss(d)}, t{t['title_id']:02d})",
                     note=f"same length as {t['_duplicate_of']} (duplicate)")
     elif d < cfg["skip_extras_under_seconds"]:
-        item.update(action="skip", name=f"Unused clip ({mmss(d)}, t{t['title_id']:02d})",
+        item.update(action="skip", name=f"Probably a Logo, Warning or Menu ({mmss(d)}, t{t['title_id']:02d})",
                     note="very short: probably a logo, menu or promo")
     else:
         got = authored_name(t, disc)
@@ -1189,7 +1190,9 @@ def plan_tv(folder: Path, rip_root: Path, disc: dict, titles: list[dict], label_
 # anything that nobody could name; and "Play All" titles whose pieces are kept anyway.
 CLUTTER = re.compile(r"\b(menu|copyright|fbi|piracy|warning|(disc|bonus features?) credits|easter egg|digital copy|"
                      r"sneak peeks?|previews|promo|disneyparks(\.com)?|logo|screen ?saver)\b", re.I)
-PLACEHOLDER = re.compile(r"^(Extra \d+|Unused clip) \(", re.I)
+# Names Shelfrip made up itself: "Extra 03 (4m10s)", and the guesses given to skipped titles
+# ("Probably Play All (12m30s)"). They're never sent to the shared database as real names.
+PLACEHOLDER = re.compile(r"^(?:(?:Extra \d+|Unused clip) \(|Probably )", re.I)
 PLAY_ALL = re.compile(r"play all|\((all|play all)\)|\s-\s+all\b", re.I)
 
 
@@ -1233,15 +1236,16 @@ def skip_clutter(items: list[dict], title: str = "") -> None:
     own = _title_words(title)
     for it in extras:
         name, d = str(it.get("name") or ""), int(it.get("duration_seconds") or 0)
-        why = ""
+        why, guess = "", ""
         if CLUTTER.search(name):
             why = "looks like a menu, warning or promo"
         elif PLACEHOLDER.match(name) and d < 45:
-            why = "short, and nothing could name it"
+            why, guess = "short, and nothing could name it", "Probably a Logo, Warning or Menu"
         elif PLACEHOLDER.match(name) and _sums_others(it, extras):
-            why = "about as long as the other extras together: probably a Play All"
+            why, guess = "about as long as the other extras together: probably a Play All", "Probably Play All"
         elif PLACEHOLDER.match(name) and _same_length_run(it, extras):
-            why = "one of several unnamed clips of the same length: probably trailers for other titles"
+            why, guess = ("one of several unnamed clips of the same length: probably trailers for other titles",
+                          "Probably a Trailer")
         elif (it.get("category") == "Trailers" and own and not OWN_TRAILER.search(name)
               and not PLACEHOLDER.match(name) and not (_title_words(name) & own)):
             why = "looks like a trailer for another title"
@@ -1254,6 +1258,8 @@ def skip_clutter(items: list[dict], title: str = "") -> None:
         if why:
             it["action"] = "skip"
             it["note"] = "; ".join(x for x in (f"skipped: {why}. Set Keep to add it anyway", it.get("note")) if x)
+            if guess and re.match(r"Extra \d+ \(", name):
+                it["name"] = f"{guess} ({mmss(d)})"
 
 
 def skip_scenes(plan: dict, titles: list[dict]) -> None:
@@ -1286,6 +1292,8 @@ def skip_scenes(plan: dict, titles: list[dict]) -> None:
         if it is None:
             continue
         it["action"] = "skip"
+        if re.match(r"Extra \d+ \(", str(it.get("name") or "")):
+            it["name"] = f"Probably a Scene From the Movie ({mmss(int(it.get('duration_seconds') or 0))})"
         it["note"] = "; ".join(x for x in (f"skipped: a scene from {names.get(fid) or f'title {fid}'}, which has all of it. "
                                            "Set Keep to add it anyway", it.get("note")) if x)
 
@@ -1384,8 +1392,8 @@ def plan_folder(folder: Path, rip_root: Path, tmdb: TMDB | None, lib: dict, cfg:
         except Exception as exc:
             print(f"    (couldn't look up extras names: {exc})")
     for it in plan["items"]:
-        if it.get("role") == "extra" and it.get("name"):
-            it["name"] = capital_case(it["name"])
+        if it.get("role") == "extra" and it.get("name") and not PLACEHOLDER.match(it["name"]):
+            it["name"] = capital_case(it["name"])  # Shelfrip's own "Probably a Copy (…, t03)" stays as written
     if cfg.get("skip_clutter", True):
         skip_clutter(plan["items"], plan.get("title") or "")
         try:
@@ -1629,6 +1637,8 @@ def apply_discdb(plan: dict, known: dict, tmdb: TMDB | None) -> None:
         elif (local or known.get("community")) and r.get("kept") is False and it["role"] in ("extra", "play_all", "edition"):
             it.update(action="skip", note="you skipped this title last time (your catalog)" if local
                       else f"skipped by people who filed this disc ({src})")
+            if desc and it["role"] in ("extra", "play_all"):  # what it was called, so you know what's skipped
+                it.update(role="extra", name=desc, category=r.get("category") or extras.guess_category(desc))
     numbered = [i for i in plan["items"] if i.get("db_numbered")]
     seen_eps: set = set()
     for i in numbered:

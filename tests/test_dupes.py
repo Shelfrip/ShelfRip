@@ -333,6 +333,30 @@ class RipDisc(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertIn("ParseName('E:')", calls[0][-1])
 
+    def test_skipped_titles_still_say_what_they_are(self):
+        mk = lambda n, d: {"role": "extra", "action": "move", "dest_dir": "x", "category": "Other",
+                           "name": f"Extra {n:02d} ({identify.mmss(d)})", "duration_seconds": d}
+        items = [mk(1, 17), mk(2, 200), mk(3, 150), mk(4, 160), mk(5, 510)]  # 5 plays 2, 3 and 4
+        identify.skip_clutter(items, "Some Film")
+        self.assertEqual([i["action"] for i in items], ["skip", "move", "move", "move", "skip"])
+        self.assertTrue(items[0]["name"].startswith("Probably a Logo, Warning or Menu ("))
+        self.assertTrue(items[4]["name"].startswith("Probably Play All ("))
+        self.assertTrue(identify.PLACEHOLDER.match(items[0]["name"]))  # never shared as a real name
+        import community
+        self.assertEqual(community._title_row(items[0], {})["name"], "")
+
+    def test_shared_names_for_skipped_titles_come_through(self):
+        import catalog
+        row = catalog._as_discdb_row({"role": "extra", "kept": 0, "category": "Other", "name": "Menu Background",
+                                      "season": None, "episode": None, "size_bytes": 1, "duration_s": 92})
+        self.assertEqual(row["description"], "Menu Background")
+        plan = {"kind": "movie", "title": "Film", "year": "2020", "items": [
+            {"source": "a.mkv", "role": "extra", "action": "move", "name": "Extra 01 (1m32s)", "category": "Other",
+             "duration_seconds": 92, "dest_dir": "x", "note": ""}]}
+        identify.apply_discdb(plan, {"pairs": {"a.mkv": row}, "community": True, "src_name": "the Shelfrip disc database"}, None)
+        it = plan["items"][0]
+        self.assertEqual((it["action"], it["name"]), ("skip", "Menu Background"))
+
     def test_drive_lost_detection(self):
         self.assertTrue(rip_all.drive_lost('MSG:5010,0,0,"Failed to open disc","Failed to open disc"'))
         self.assertFalse(rip_all.drive_lost('MSG:2003,0,1,"Error \'Scsi error - MEDIUM ERROR\' occurred while reading"'))

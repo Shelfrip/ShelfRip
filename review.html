@@ -415,7 +415,7 @@ function xpOf(p){
   let xp = 50;
   if (p.kind === "music") return xp + 2 * kept.length;
   for (const it of kept){
-    if (it.role === "extra") xp += 5 + (it.name && !/^(Extra \d+ \(|Unused clip)/i.test(it.name) ? 10 : 0);
+    if (it.role === "extra") xp += 5 + (it.name && !/^(Extra \d+ \(|Unused clip|Probably )/i.test(it.name) ? 10 : 0);
     else if (["main","edition","episode"].includes(it.role)) xp += 10;
   }
   if (/4k/i.test(p.format || "")) xp += 30;
@@ -784,7 +784,8 @@ const trackFile = (p, it) => `${(+p.discs||1) > 1 ? (+p.disc||1) + pad(it.track)
 const PH = /extra\(s\) still have placeholder names/;
 // an extra tied to one episode is named after that episode, so its own name isn't used
 const byEpisode = (p, it) => p.kind === "tv" && it.role === "extra" && it.attach === "episode";
-const isPlaceholder = it => it.role === "extra" && it.action === "move" && it.attach !== "episode" && /^Extra \d+ \(/.test(it.name || "");
+// a kept extra still named "Extra 03 (…)" or with Shelfrip's "Probably …" guess wants a real name
+const isPlaceholder = it => it.role === "extra" && it.action === "move" && it.attach !== "episode" && /^(Extra \d+ \(|Probably )/.test(it.name || "");
 function phWarning(p){ const n = p.items.filter(isPlaceholder).length; return n ? `${n} extra(s) still have placeholder names.` : ""; }
 function liveWarnings(p){
   const ws = (p.warnings||[]).filter(w => !PH.test(w));

@@ -41,7 +41,7 @@ import uuid
 import paths
 
 TIMEOUT = 8
-PLACEHOLDER = re.compile(r"^(Extra \d+ \(|Unused clip)", re.I)
+PLACEHOLDER = re.compile(r"^(Extra \d+ \(|Unused clip|Probably )", re.I)  # see identify.PLACEHOLDER
 GENERIC_COMMENTARY = re.compile(r"^commentary( \d+)?$", re.I)
 SOURCE = "the Shelfrip disc database"
 MAX_AUDIO, MAX_SUBS = 24, 48            # per title; the server keeps no more than this either

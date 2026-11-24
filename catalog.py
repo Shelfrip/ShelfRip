@@ -193,9 +193,10 @@ def _as_discdb_row(r: dict) -> dict:
     item_type = {"main": "MainMovie", "edition": "MainMovie", "episode": "Episode"}.get(role, "")
     if role == "extra" and r["kept"]:
         item_type = {"Deleted Scenes": "DeletedScene", "Trailers": "Trailer"}.get(r["category"] or "", "Extra")
-    placeholder = re.match(r"^(Extra \d+ \(|Unused clip)", r["name"] or "")
+    placeholder = re.match(r"^(Extra \d+ \(|Unused clip|Probably )", r["name"] or "")
     return {"itemType": item_type,
-            "description": r["name"] if role == "extra" and r["kept"] and not placeholder else "",
+            # skipped extras keep their name too, so the next person sees what it is (it stays skipped)
+            "description": r["name"] if role == "extra" and not placeholder else "",
             "season": str(r["season"]) if r["season"] is not None else "",
             "episode": str(r["episode"]) if r["episode"] is not None else "",
             "size": r["size_bytes"], "duration": r["duration_s"], "category": r["category"],

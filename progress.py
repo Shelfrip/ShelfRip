@@ -27,7 +27,7 @@ from pathlib import Path
 
 import paths
 
-PLACEHOLDER = re.compile(r"^(Extra \d+ \(|Unused clip)", re.I)
+PLACEHOLDER = re.compile(r"^(Extra \d+ \(|Unused clip|Probably )", re.I)  # see identify.PLACEHOLDER
 
 # (level reached, rank name)
 RANKS = [(1, "Rookie"), (3, "Collector"), (6, "Archivist"), (10, "Curator"), (15, "Librarian"),

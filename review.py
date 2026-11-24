@@ -240,7 +240,7 @@ def refresh_warnings(plan: dict) -> None:
     """Recount placeholder extras from the names as they are now (you may have renamed them)."""
     ws = [w for w in plan.get("warnings") or [] if "still have placeholder names" not in w]
     n = sum(1 for it in plan.get("items", []) if it.get("role") == "extra" and it.get("action") == "move"
-            and it.get("attach") != "episode" and re.match(r"Extra \d+ \(", str(it.get("name", ""))))
+            and it.get("attach") != "episode" and re.match(r"Extra \d+ \(|Probably ", str(it.get("name", ""))))
     if n:
         ws.append(f"{n} extra(s) still have placeholder names.")
     plan["warnings"] = ws
