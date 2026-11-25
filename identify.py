@@ -1680,12 +1680,16 @@ def apply_discdb(plan: dict, known: dict, tmdb: TMDB | None) -> None:
     for i in numbered:
         key = (i["season"], i["episode"])
         if key in seen_eps:
-            i.update(action="skip", note=f"another copy of s{key[0]:02d}e{key[1]:02d} (per {src})")
+            i.update(action="skip", name=f"Probably a Copy of s{key[0]:02d}e{key[1]:02d}",
+                     note=f"another copy of s{key[0]:02d}e{key[1]:02d} (per {src})")
         seen_eps.add(key)
     for i in plan["items"]:
-        if i["role"] == "episode" and not i.get("db_numbered") and \
-                any(abs(i["duration_seconds"] - n["duration_seconds"]) <= 1 for n in numbered):
-            i.update(action="skip", note=f"same length as an episode {src} identified: probably a copy")
+        twin = next((n for n in numbered if abs(i["duration_seconds"] - n["duration_seconds"]) <= 1), None) \
+            if i["role"] == "episode" and not i.get("db_numbered") else None
+        if twin:
+            # named after the episode it copies, not the next episode number it was given before
+            i.update(action="skip", name=f"Probably a Copy of s{twin['season']:02d}e{twin['episode']:02d}",
+                     note=f"same length as an episode {src} identified: probably a copy")
     if plan["kind"] == "tv" and numbered:
         plan["warnings"] = [w for w in plan["warnings"] if "Assumed Season 1" not in w]
 

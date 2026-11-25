@@ -384,6 +384,15 @@ class RipDisc(unittest.TestCase):
         identify.name_copies(items)
         self.assertEqual(items[1]["name"], "Probably a Copy of Tunnel Scene")
 
+    def test_episode_copies_named_after_the_episode(self):
+        ep = lambda src, d: {"source": src, "role": "episode", "action": "move", "duration_seconds": d,
+                             "name": "x", "dest_dir": "S", "season": 2, "episode": 9}
+        plan = {"kind": "tv", "title": "Show", "year": "2011", "library_dir": "TV\\Show", "warnings": [],
+                "items": [ep("t02.mkv", 3164), ep("t07.mkv", 3164)]}
+        pairs = {"t02.mkv": {"itemType": "Episode", "season": "2", "episode": "1", "description": ""}}
+        identify.apply_discdb(plan, {"pairs": pairs, "src_name": "TheDiscDB"}, None)
+        self.assertEqual([(i["action"], i["name"]) for i in plan["items"]][1], ("skip", "Probably a Copy of s02e01"))
+
     def test_drive_lost_detection(self):
         self.assertTrue(rip_all.drive_lost('MSG:5010,0,0,"Failed to open disc","Failed to open disc"'))
         self.assertFalse(rip_all.drive_lost('MSG:2003,0,1,"Error \'Scsi error - MEDIUM ERROR\' occurred while reading"'))
