@@ -26,7 +26,8 @@ OUT = HERE / "installer"
 NAME = "Shelfrip"
 MODULES = ["app", "review", "identify", "rip_all", "split", "music", "plex", "extras", "discdb",
            "catalog", "crosscheck", "naming", "paths", "community", "desktop", "progress", "health", "tidy", "dupes", "trouble", "importer", "ripfiles",
-           "subcheck", "epmatch", "refsubs", "handbrake"]
+           "subcheck", "epmatch", "refsubs", "handbrake", "processes", "background",
+           "linux_support", "linux_tray", "linux_keyring", "linux_window", "linux_install", "linux_update"]
 PORTABLE_NOTE = ("This file makes Shelfrip portable: it keeps your settings, shelf and disc database in this\r\n"
                  "folder instead of %APPDATA%\\Shelfrip. Delete it to use the same settings as an installed Shelfrip.\r\n")
 SHIP = ["README.md", "LICENSE.txt", "THIRD-PARTY-NOTICES.txt"]

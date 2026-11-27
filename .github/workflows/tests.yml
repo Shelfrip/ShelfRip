@@ -18,3 +18,29 @@ jobs:
           node-version: "22"
       - name: Run the tests
         run: python tests/run_all.py
+  linux-portability:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ["python:3.12-slim", "python:3.12-alpine"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Python tests on Debian and Alpine
+        run: >-
+          docker run --rm
+          --mount "type=bind,source=$GITHUB_WORKSPACE,target=/src,readonly"
+          -w /src
+          -e PYTHONDONTWRITEBYTECODE=1
+          -e SHELFRIP_DATA=/tmp/shelfrip-tests
+          ${{ matrix.image }} python tests/run_all.py
+  linux-desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native desktop test dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          python3-gi libayatana-appindicator3-1 libsecret-tools gnome-keyring
+          dbus-x11 xvfb xauth libwebkit2gtk-4.1-0 openbox wmctrl desktop-file-utils
+      - name: Test an isolated keyring and native tray
+        run: /usr/bin/python3 tests/desktop_services.py

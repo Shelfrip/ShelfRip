@@ -72,7 +72,10 @@ def write_config(cfg: dict) -> None:
     with CONFIG_LOCK:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = CONFIG_PATH.with_name(f"config.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
+            if os.name != "nt":
+                os.fchmod(f.fileno(), 0o600)  # also tighten an existing temp file before writing secrets
+            f.write(json.dumps(cfg, indent=2))
         for attempt in range(5):
             try:
                 tmp.replace(CONFIG_PATH)
