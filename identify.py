@@ -1347,9 +1347,14 @@ def plan_tv(folder: Path, rip_root: Path, disc: dict, titles: list[dict], label_
             last = max(tmdb_eps)
             absolute = min(nxt) > 1          # e.g. One Piece: season 3 runs e78-e91
             start = next_ep if absolute else max(1, next_ep - last)
+            # carry on after what the library and other waiting discs already have of that season,
+            # so the next box-set part doesn't start again at e01 (Fairy Tail Part 6, 2026-11-27)
+            have_new = episodes_in_library(lib, tid, norm(title), season + 1)
             claimed_new = episodes_claimed_by_plans(rip_root, folder, show_key, season + 1)
-            if claimed_new:
-                start = max(start, max(claimed_new) + 1)
+            if have_new or claimed_new:
+                start = max(start, max(have_new | claimed_new) + 1)
+            if have_new:
+                source += f"; library already has S{season + 1:02d} up to e{max(have_new):02d}"
             warnings.append(f"TMDB's season {season} ends at e{last:02d}, so the disc label's season numbering "
                             f"doesn't match TMDB's. Numbered as TMDB season {season + 1} from e{start:02d}: check the "
                             f"first episode on the disc case and set Season and First episode if it's wrong.")

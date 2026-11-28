@@ -832,7 +832,10 @@ def check_folder(folder: Path, cfg: dict, tmdb, exe: str | None, langs: set[str]
         vids = [u for u in todo if tracks.get(str(u["video"]), {}).get("cues") and u["label"] == u["item"].get("source")]
         for u in vids:
             it = u["item"]
-            if it.get("action") == "skip" and re.search(r"copy|duplicate|same length", it.get("note") or "", re.I):
+            # a title skipped because Plex already has it isn't a copy of another title on this disc,
+            # so comparing it with them only gave false alarms (Fairy Tail Part 6, 2026-11-27)
+            if it.get("action") == "skip" and not it.get("library_copy") and \
+                    re.search(r"copy|duplicate|same length", it.get("note") or "", re.I):
                 mine = tracks[str(u["video"])]["cues"]
                 others = [o for o in vids if o is not u and o["item"].get("action") != "skip"] or \
                     [o for o in vids if o is not u]
