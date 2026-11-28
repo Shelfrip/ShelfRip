@@ -136,6 +136,58 @@ class FakeEncode(unittest.TestCase):
         self.assertFalse((TMP / "enc" / "c.mkv").exists())
 
 
+def mp4(seconds: float, version: int = 0, moov_last: bool = True, large_mdat: bool = False) -> bytes:
+    """A bare MP4: ftyp, mdat and a moov holding just the movie header."""
+    import struct
+    scale = 90000
+    if version == 1:
+        mvhd = struct.pack(">B3xQQIQ", 1, 0, 0, scale, int(seconds * scale)) + bytes(80)
+    else:
+        mvhd = struct.pack(">B3xIIII", 0, 0, 0, scale, int(seconds * scale)) + bytes(80)
+    mvhd = struct.pack(">I4s", 8 + len(mvhd), b"mvhd") + mvhd
+    moov = struct.pack(">I4s", 8 + len(mvhd), b"moov") + mvhd
+    ftyp = struct.pack(">I4s", 16, b"ftyp") + b"isom" + bytes(4)
+    data = bytes(1000)
+    mdat = (struct.pack(">I4sQ", 1, b"mdat", 16 + len(data)) if large_mdat else struct.pack(">I4s", 8 + len(data), b"mdat")) + data
+    return ftyp + (mdat + moov if moov_last else moov + mdat)
+
+
+class Mp4Length(unittest.TestCase):
+    """MKVToolNix gives no length for MP4s, so every MP4 preset's encode looked 0 s long and was thrown away."""
+    def test_reads_the_movie_header(self):
+        for kw in ({}, {"version": 1}, {"moov_last": False}, {"large_mdat": True}):
+            f = TMP / "len.mp4"
+            f.write_bytes(mp4(6180.5, **kw))
+            self.assertAlmostEqual(review._mp4_length(f), 6180.5, places=3, msg=kw)
+            self.assertAlmostEqual(review._length(f, "mkvmerge-not-used"), 6180.5, places=3)
+
+    def test_not_an_mp4(self):
+        f = TMP / "junk.mp4"
+        f.write_bytes(b"not a movie at all")
+        self.assertEqual(review._mp4_length(f), 0)
+
+
+class StopMessage(unittest.TestCase):
+    def test_progress_after_stop_keeps_the_stopped_message(self):
+        """HandBrake can print progress after Stop; it used to replace "Filing stopped" with "encoding (2%)"."""
+        from unittest import mock
+        src = TMP / "stopsrc.mkv"
+        src.write_bytes(b"x" * 100)
+        job = {}
+
+        def fake_encode(s, out, c, on_progress=None, stopped=None):
+            on_progress(0.01)
+            job["stop"] = True
+            job["current"] = "Filing stopped."
+            on_progress(0.02)
+            raise handbrake.Stopped()
+        with mock.patch.object(handbrake, "applies", lambda c, it: True), \
+                mock.patch.object(handbrake, "encode", fake_encode):
+            with self.assertRaises(review.Stopped):
+                review._place(src, TMP / "lib" / "x.mkv", {}, job, TMP / "rip", "Filing 1 of 1")
+        self.assertEqual(job["current"], "Filing stopped.")
+
+
 REAL = all(shutil.which(t) for t in ("HandBrakeCLI", "ffmpeg", "ffprobe", "mkvmerge"))
 
 
