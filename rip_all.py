@@ -45,7 +45,7 @@ CONFIG_PATH = paths.CONFIG_PATH
 
 DEFAULT_CONFIG = {
     # Where MakeMKV is installed. 64-bit is used if it exists.
-    "makemkvcon_path": r"C:\Program Files (x86)\MakeMKV\makemkvcon64.exe",
+    "makemkvcon_path": r"C:\Program Files (x86)\MakeMKV\makemkvcon64.exe" if os.name == "nt" else "",
     "output_root": "",   # chosen in the setup step (Settings)
     # Titles shorter than this are skipped (menus, logos, FBI warnings).
     # 30s keeps short extras like trailers; raise it if you get junk.
@@ -59,9 +59,8 @@ DEFAULT_CONFIG = {
     # --watch mode: seconds between checks for newly inserted discs.
     "watch_poll_seconds": 15,
     # Optional: TheDiscDB's scan tool, to make an upload-ready disc manifest while the disc
-    # is in the drive (download thediscdb-scan.exe from
-    # https://github.com/TheDiscDb/optical-disc-manifest/releases?q=scan-cli )
-    "thediscdb_scan_path": str(HERE / "tools" / "thediscdb-scan.exe"),
+    # is mounted. Supply a native scanner implementing the CLI below.
+    "thediscdb_scan_path": str(HERE / "tools" / "thediscdb-scan.exe") if os.name == "nt" else "",
 }
 
 # A drive is "in use" while its lock file in output_root is fresh. The rip that
@@ -176,6 +175,8 @@ def find_makemkv(cfg: dict) -> str | None:
         cands += [folder / "makemkvcon64.exe", folder / "makemkvcon.exe", folder / "makemkvcon"]
     for base in (r"C:\Program Files (x86)\MakeMKV", r"C:\Program Files\MakeMKV"):
         cands += [Path(base) / "makemkvcon64.exe", Path(base) / "makemkvcon.exe"]
+    if sys.platform == "darwin":
+        cands += [root / "MakeMKV.app/Contents/MacOS/makemkvcon" for root in (Path("/Applications"), Path.home() / "Applications")]
     for c in cands:
         if c.is_file():
             return str(c)
@@ -340,7 +341,8 @@ def run_makemkv(cfg: dict, args: list[str], logfile: Path | None = None,
     through that too (that's how a rip could sit at 83% with nothing written). on_phase(name) gets
     what MakeMKV is doing meanwhile ("Opening Blu-ray disc", "Analyzing seamless segments", ...)."""
     cmd = [cfg["makemkvcon_path"], "-r", "--progress=-same"] + args
-    proc = subprocess.Popen(
+    import processes
+    proc = processes.spawn(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace",
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -382,6 +384,7 @@ def run_makemkv(cfg: dict, args: list[str], logfile: Path | None = None,
                 fh.write(line + "\n")
     finally:
         proc.wait()
+        proc.stdout.close()
         if device:
             PROCS.pop(device, None)
         if fh:
@@ -415,20 +418,30 @@ def windows_drives() -> list[dict] | None:
     } for i, d in enumerate(data)]
 
 
+_LINUX_AUDIO_DRIVES: dict[str, dict] = {}
+
+
 def scan_drives(cfg: dict) -> list[dict]:
-    """Optical drives and the discs in them. Asks Windows first (doesn't disturb busy drives),
-    falling back to MakeMKV's own drive list."""
+    """Optical drives and their media, using the OS's cached information when available.
+    Falls back to MakeMKV's drive list when native discovery is unavailable."""
     drives = None
     if os.name == "nt":
         drives = windows_drives()
         if drives is None:  # PowerShell can be slow while drives are busy; try once more
             drives = windows_drives()
+    elif sys.platform.startswith("linux"):
+        import linux_support
+        drives = linux_support.scan_drives()
+    elif sys.platform == "darwin":
+        import macos_support
+        drives = macos_support.scan_drives()
     if drives is None:
         _, out = run_makemkv(cfg, ["--cache=1", "info", "disc:9999"])
         drives = parse_drives(out)
     if cfg.get("drives"):
-        wanted = {d.upper().rstrip("\\") for d in cfg["drives"]}
-        drives = [d for d in drives if d["device"].upper() in wanted]
+        normal = (lambda d: d.upper().rstrip("\\")) if os.name == "nt" else os.path.realpath
+        wanted = {normal(d) for d in cfg["drives"]}
+        drives = [d for d in drives if normal(d["device"]) in wanted]
     if os.name == "nt":
         try:  # audio CDs get a label from their MusicBrainz disc id ("Audio CD" isn't unique)
             import music
@@ -436,14 +449,40 @@ def scan_drives(cfg: dict) -> list[dict]:
                 music.label_drive(d)
         except Exception as exc:
             log(f"couldn't check for audio CDs: {exc}")
+    elif sys.platform.startswith("linux") or sys.platform == "darwin":
+        import music
+        for d in drives:
+            dev = d["device"]
+            if d.get("access_error"):
+                continue
+            if d.get("audio"):
+                if dev in PROCS or (cfg.get("output_root") and drive_locked(cfg, dev)):
+                    previous = _LINUX_AUDIO_DRIVES.get(dev, {})
+                    d["disc_label"] = previous.get("disc_label", "Audio CD")
+                    if "toc" in previous:
+                        d["toc"] = previous["toc"]
+                else:
+                    music.label_drive(d)
+                    _LINUX_AUDIO_DRIVES[dev] = dict(d)
+            else:
+                _LINUX_AUDIO_DRIVES.pop(dev, None)
+        present = {d["device"] for d in drives}
+        for dev in list(_LINUX_AUDIO_DRIVES):
+            if dev not in present:
+                _LINUX_AUDIO_DRIVES.pop(dev, None)
     return drives
 
 
 def makemkv_source(drive: dict) -> str:
-    """dev:D: when we know the drive letter, otherwise MakeMKV's own drive index."""
+    """Use the device path/drive letter when known, otherwise MakeMKV's drive index."""
     dev = drive["device"]
     if re.fullmatch(r"[A-Za-z]:", dev):
         return f"dev:{dev.upper()}"
+    if sys.platform == "darwin" and (dev.startswith("macos:") or dev.startswith("/dev/")):
+        import macos_support
+        return "dev:" + macos_support.media_device(dev)
+    if sys.platform.startswith("linux") and dev.startswith("/dev/"):
+        return f"dev:{dev}"
     return f"disc:{drive['index']}"
 
 
@@ -502,6 +541,14 @@ def eject(device: str) -> None:
     The letter goes into a PowerShell command, so anything that isn't a plain drive letter is
     ignored rather than passed through (a drive name comes from MakeMKV and config files).
     """
+    if sys.platform == "darwin":
+        import macos_support
+        macos_support.eject(device)
+        return
+    if sys.platform.startswith("linux"):
+        import linux_support
+        linux_support.eject(device)
+        return
     m = re.fullmatch(r"\s*([A-Za-z]):?\\?\s*", str(device or ""))
     if not m:
         log(f"Not ejecting {device!r}: that isn't a drive letter")
@@ -729,6 +776,82 @@ def drive_lost(text: str) -> bool:
     return bool(re.search(r"Unknown device|Failed to open disc", text, re.I))
 
 
+DISC_SCAN_TIMEOUT = 300
+
+
+def disc_scanner(cfg: dict) -> str | None:
+    """An explicit executable takes precedence; otherwise discover the native CLI."""
+    configured = str(cfg.get("thediscdb_scan_path") or "").strip()
+    if configured:
+        return shutil.which(configured)
+    name = "thediscdb-scan.exe" if os.name == "nt" else "thediscdb-scan"
+    return shutil.which(str(HERE / "tools" / name)) or shutil.which(name)
+
+
+def scan_manifest(scanner: str, root: str, out_dir: Path, device: str) -> None:
+    """Run the optional scanner under the rip's cancellation/shutdown ownership.
+
+    Publish only a successful JSON manifest. Failed scans leave no partial upload
+    candidate and never prevent normal ripping.
+    """
+    import processes
+    import tempfile
+    proc = None
+    st = STATUS.setdefault(device, {})
+    if st.get("cancel"):
+        return
+    try:
+        with tempfile.TemporaryDirectory(prefix=".disc-scan-", dir=out_dir) as tmp:
+            output = Path(tmp) / "disc.odm.json"
+            proc = processes.spawn([scanner, root, "--output", str(output), "--force", "--quiet"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            end_with_us(proc)
+            PROCS[device] = proc
+            try:
+                if st.get("cancel"):
+                    proc.terminate()
+                code = proc.wait(timeout=DISC_SCAN_TIMEOUT)
+                if st.get("cancel"):
+                    return
+                if code:
+                    raise ValueError(f"scanner exited with status {code}")
+                manifest = json.loads(output.read_text(encoding="utf-8-sig"))
+                if not isinstance(manifest, dict) or not isinstance(manifest.get("disc"), dict):
+                    raise ValueError("scanner did not produce a disc manifest")
+                output.replace(out_dir / "disc.odm.json")
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+                if PROCS.get(device) is proc:
+                    PROCS.pop(device, None)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        log(f"{device} TheDiscDB scan skipped ({exc})")
+
+
+def record_disc_metadata(cfg: dict, device: str, disc: dict, out_dir: Path) -> None:
+    import discdb
+    root = discdb.mounted_root(device)
+    if not root:
+        if sys.platform.startswith("linux") or sys.platform == "darwin":
+            log(f"{device} has no accessible mounted disc. Fingerprinting and TheDiscDB scanning skipped; "
+                "mount the disc in your file manager to enable them. Ripping can continue.")
+        return
+    fp = discdb.fingerprint(root)
+    if fp:
+        disc.update(content_hash=fp["content_hash"], disc_layout=fp["layout"])
+    scanner = disc_scanner(cfg)
+    if scanner:
+        scan_manifest(scanner, root, out_dir, device)
+    elif cfg.get("thediscdb_scan_path"):
+        log(f"{device} TheDiscDB scan skipped: configured scanner was not found or is not executable.")
+
+
 def rip_disc(cfg: dict, drive: dict) -> dict:
     """Rip one disc: read its titles, leave out duplicates and scene-by-scene copies, rip the
     rest (resuming an interrupted rip), retry titles that came out short, and save
@@ -783,22 +906,7 @@ def rip_disc(cfg: dict, drive: dict) -> dict:
         "ripped_at": started.isoformat(timespec="seconds"),
         "min_length_seconds": int(min_len),
     })
-    if re.fullmatch(r"[A-Za-z]:", device):
-        try:  # TheDiscDB fingerprint (file sizes only), used by the naming step
-            import discdb
-            fp = discdb.fingerprint(device + "\\")
-            if fp:
-                disc.update(content_hash=fp["content_hash"], disc_layout=fp["layout"])
-        except Exception as exc:
-            log(f"{device} [{label}] couldn't fingerprint disc ({exc})")
-        scanner = Path(cfg.get("thediscdb_scan_path") or "")
-        if scanner.is_file():
-            try:  # reads disc structure only; the file is offered for upload after filing
-                subprocess.run([str(scanner), device + "\\", "--output", str(out_dir / "disc.odm.json"),
-                                "--force", "--quiet"], capture_output=True, timeout=300,
-                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            except Exception as exc:
-                log(f"{device} [{label}] TheDiscDB scan skipped ({exc})")
+    record_disc_metadata(cfg, device, disc, out_dir)
     n_titles = len(disc["titles"])
     total_min = sum(t.get("duration_seconds", 0) for t in disc["titles"]) // 60
     log(f"{device} [{label}] {n_titles} titles, {total_min} min total. Ripping...")
@@ -1051,7 +1159,10 @@ def cancel(device: str) -> bool:
             return True
         return False
     STATUS.setdefault(device, {})["cancel"] = True
-    proc.terminate()
+    try:
+        proc.terminate()
+    except ProcessLookupError:
+        pass
     log(f"{device} rip cancelled")
     return True
 
@@ -1120,6 +1231,9 @@ def rip_loaded(cfg: dict, busy: set[str], finished: dict[str, str],
         dev = d["device"]
         if not d["loaded"]:
             finished.pop(dev, None)
+            continue
+        if d.get("access_error"):
+            log(d["access_error"])
             continue
         if dev in busy or finished.get(dev) == d["disc_label"]:
             continue

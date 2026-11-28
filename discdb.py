@@ -54,24 +54,53 @@ def q_size(n: int) -> str:
 
 # --------------------------------------------------------------------------- fingerprint
 
+def mounted_root(device: str) -> str | None:
+    """Resolve an optical device to its mounted filesystem root on either platform."""
+    if re.fullmatch(r"[A-Za-z]:", device):
+        return device + "\\"
+    if sys.platform.startswith("linux"):
+        import linux_support
+        return linux_support.mounted_root(device)
+    if sys.platform == "darwin":
+        import macos_support
+        return macos_support.mounted_root(device)
+    return None
+
+
+def disc_directory(root: str | Path, *parts: str) -> Path | None:
+    """Find standard disc folders even on case-sensitive mounts with lower-case names."""
+    current = Path(root)
+    for part in parts:
+        exact = current / part
+        if exact.is_dir():
+            current = exact
+        else:
+            matches = [p for p in current.iterdir() if p.name.upper() == part.upper() and p.is_dir()]
+            if len(matches) != 1:
+                return None
+            current = matches[0]
+    return current
+
+
 def fingerprint(root: str) -> dict | None:
     """TheDiscDB content hash for a disc mounted at root (e.g. 'D:\\').
 
     MD5 over each file's size as an 8-byte little-endian number, files sorted by
-    name: BDMV\\STREAM\\*.m2ts for Blu-ray/4K, every file in VIDEO_TS for DVD.
-    Only reads the directory listing, so it's quick and doesn't disturb the drive.
+    name: BDMV\\STREAM\\*.m2ts for Blu-ray/4K, VIDEO_TS .IFO/.BUP/.VOB files for DVD.
+    Only reads file metadata, not video contents.
     """
     base = Path(root)
-    for sub, ext, layout in ((("BDMV", "STREAM"), ".m2ts", "bluray"), (("VIDEO_TS",), None, "dvd")):
-        d = base.joinpath(*sub)
+    for sub, extensions, layout in ((("BDMV", "STREAM"), {".m2ts"}, "bluray"),
+                                     (("VIDEO_TS",), {".ifo", ".bup", ".vob"}, "dvd")):
         try:
-            if not d.is_dir():
+            d = disc_directory(base, *sub)
+            if d is None:
                 continue
             names = sorted(p.name for p in d.iterdir()
-                           if p.is_file() and (ext is None or p.name.lower().endswith(ext)))
+                           if p.is_file() and p.suffix.lower() in extensions)
             if not names:
                 continue
-            md5 = hashlib.md5()
+            md5 = hashlib.md5(usedforsecurity=False)
             for n in names:
                 md5.update(struct.pack("<Q", (d / n).stat().st_size))
             return {"content_hash": md5.hexdigest().upper(), "layout": layout, "files": len(names)}

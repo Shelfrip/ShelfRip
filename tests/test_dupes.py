@@ -491,12 +491,14 @@ class RipDisc(unittest.TestCase):
             self.assertEqual(rip_all.already_ripped({"output_root": root}, "GOT_S2"), d.name)
 
     def test_eject_ignores_anything_but_a_drive_letter(self):
+        from unittest.mock import patch
         calls = []
         real = rip_all.subprocess.run
         rip_all.subprocess.run = lambda *a, **k: calls.append(a[0])
         try:
-            rip_all.eject("E:'); Remove-Item C:\\x; ('")
-            rip_all.eject("e:")
+            with patch.object(rip_all.sys, "platform", "win32"):
+                rip_all.eject("E:'); Remove-Item C:\\x; ('")
+                rip_all.eject("e:")
         finally:
             rip_all.subprocess.run = real
         self.assertEqual(len(calls), 1)

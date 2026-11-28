@@ -15,7 +15,9 @@ from __future__ import annotations
 import csv
 import io
 import os
+import signal
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -26,11 +28,31 @@ import paths
 
 NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 NAMES = ("makemkvcon.exe", "makemkvcon64.exe")
+PROC = Path("/proc")
+
+
+def _linux_pids(names: set[str]) -> list[int]:
+    """Only this user's actual MakeMKV executables, not matching shell arguments."""
+    found = []
+    for entry in PROC.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if entry.stat().st_uid == os.getuid() and (entry / "exe").resolve(strict=True).name in names:
+                found.append(int(entry.name))
+        except OSError:  # exited while scanning, or belongs to an inaccessible process
+            pass
+    return found
 
 
 # --------------------------------------------------------------------------- leftover MakeMKV
 
 def _makemkv_pids() -> list[int]:
+    if sys.platform == "darwin":
+        import macos_support
+        return macos_support.process_ids({"makemkvcon"})
+    if sys.platform.startswith("linux"):
+        return _linux_pids({"makemkvcon", "makemkvcon64", ".makemkvcon-wrapped"})
     if os.name != "nt":
         return []
     pids = []
@@ -49,6 +71,11 @@ def _makemkv_pids() -> list[int]:
 def makemkv_window_open() -> bool:
     """Is MakeMKV's own window (makemkv.exe) open? It can hold on to the drives it shows, and two
     programs reading one drive make rips crawl, or fail as if the disc were scratched."""
+    if sys.platform == "darwin":
+        import macos_support
+        return bool(macos_support.process_ids({"makemkv"}))
+    if sys.platform.startswith("linux"):
+        return bool(_linux_pids({"makemkv", ".makemkv-wrapped"}))
     if os.name != "nt":
         return False
     try:
@@ -83,8 +110,15 @@ def stop_leftovers() -> int:
     alive = set(_makemkv_pids())
     for pid in list(LEFTOVER):
         if pid in alive:  # still a MakeMKV process (not a reused process id)
-            r = subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, creationflags=NOWIN)
-            n += r.returncode == 0
+            if sys.platform.startswith("linux") or sys.platform == "darwin":
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    n += 1
+                except (ProcessLookupError, PermissionError):
+                    pass
+            else:
+                r = subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, creationflags=NOWIN)
+                n += r.returncode == 0
     LEFTOVER.clear()
     return n
 

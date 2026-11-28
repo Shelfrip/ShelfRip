@@ -73,6 +73,34 @@ server expects it.
 - **Makes it a bit of a game.** Every disc you file earns XP towards your next rank, with daily goals,
   streaks and badges, and your collection fills a shelf.
 
+## macOS (experimental)
+
+The source version includes native optical-drive discovery, mounted-disc metadata,
+Keychain password storage, macOS file/folder actions and supervised background
+operation. Install Python 3.10+ and MakeMKV, then run `python3 app.py`.
+See [macOS setup and validation](docs/macos.md) for dependencies and the remaining
+work. A packaged Mac app and full hardware validation are not available yet.
+
+## Linux (experimental)
+
+Linux support includes drive discovery and ejection, audio-CD table-of-contents reads,
+native file/folder dialogs, file playback, desktop notifications, a tray menu and
+desktop keyring storage for OpenSubtitles passwords, mounted-disc fingerprints and
+optional native TheDiscDB scanner integration. Python 3.10+ is
+required, along with Linux MakeMKV for DVDs/Blu-rays and cyanrip for audio CDs.
+
+When a release includes `Shelfrip-VERSION-linux.tar.gz`, extract it and run
+`python3 shelfrip/linux_install.py` to install for your user account. This adds an
+app-menu launcher, optional start at login and verified in-app updates. Python 3.10+
+and the native tools are still required.
+
+From source, run `python3 app.py`, then open `http://127.0.0.1:8765`, or use
+`python3 app.py --detach` to run in the background. The tray and keyring need the
+appropriate desktop services and libraries. See the
+[Linux setup and testing guide](docs/linux.md) for distribution-independent setup,
+hardware checks and the remaining differences from Windows. Linux support is still
+experimental; automated tests do not substitute for testing real discs and drives.
+
 ## Quick start (Windows 10 or 11)
 
 1. **Install [MakeMKV](https://www.makemkv.com/download/).** It does the actual ripping. It's free
@@ -254,7 +282,8 @@ The server code, and how answers are decided, are in [server/](server/).
 
 ## Run from source
 
-You need Python 3.10 or newer on Windows. Only the standard library is used.
+You need Python 3.10 or newer. Only the Python standard library is used. Windows
+is the original supported platform; experimental Linux setup is described above.
 
 ```
 python app.py

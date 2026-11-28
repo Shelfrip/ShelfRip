@@ -11,8 +11,8 @@ TMDB's short plot summaries.
     a day or two of quota at most and later discs of the same show cost nothing.
   * The files are only read for matching. They're never added to your rips, never shared and
     never sent to the Shelfrip disc database.
-  * Your OpenSubtitles password is kept in your settings file, encrypted for your Windows
-    account (DPAPI) when Shelfrip runs on Windows.
+  * New OpenSubtitles passwords use the desktop Secret Service keyring on Linux, or
+    your Windows account's DPAPI protection on Windows.
 
 API: https://opensubtitles.stoplight.io/docs/opensubtitles-api
 """
@@ -23,6 +23,7 @@ import base64
 import json
 import os
 import re
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -71,7 +72,13 @@ def _dpapi(data: bytes, protect: bool) -> bytes:
 
 
 def protect(password: str) -> str:
-    """Encrypt a password for this Windows account; elsewhere it's stored as typed."""
+    """Protect a newly entered password; Linux requires a working desktop keyring."""
+    if password and sys.platform == "darwin":
+        import macos_keyring
+        return macos_keyring.store(password)
+    if password and sys.platform.startswith("linux"):
+        import linux_keyring
+        return linux_keyring.store(password)
     if not password or password.startswith(PROTECTED) or os.name != "nt":
         return password
     try:
@@ -81,6 +88,12 @@ def protect(password: str) -> str:
 
 
 def reveal(stored: str) -> str:
+    if stored and (sys.platform == "darwin" or stored.startswith("keychain:")):
+        import macos_keyring
+        return macos_keyring.lookup(stored)
+    if stored and (sys.platform.startswith("linux") or stored.startswith("secret-service:")):
+        import linux_keyring
+        return linux_keyring.lookup(stored)
     if not stored or not stored.startswith(PROTECTED):
         return stored or ""
     try:
@@ -92,10 +105,15 @@ def reveal(stored: str) -> str:
 # --------------------------------------------------------------------------- the API
 
 class OpenSubtitles:
-    def __init__(self, cfg: dict, version: str = ""):
+    def __init__(self, cfg: dict, version: str = "", resolve_password: bool = True):
         self.key = (cfg.get("opensubtitles_api_key") or APP_KEY or "").strip()
         self.user = (cfg.get("opensubtitles_username") or "").strip()
-        self.password = reveal(cfg.get("opensubtitles_password") or "")
+        self.credential_error = ""
+        try:
+            stored = cfg.get("opensubtitles_password") or ""
+            self.password = reveal(stored) if resolve_password else ("saved" if stored else "")
+        except ValueError as exc:
+            self.password, self.credential_error = "", str(exc)
         self.agent = f"Shelfrip v{version or '1'}"
         self.base = API
         self.token = ""
@@ -103,6 +121,8 @@ class OpenSubtitles:
 
     def ready(self) -> str:
         """'' when it can be used, else why not, in plain words."""
+        if self.credential_error:
+            return self.credential_error
         if not self.key:
             return "no OpenSubtitles API key"
         if not self.user or not self.password:

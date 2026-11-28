@@ -42,6 +42,8 @@ def _installed_data_dir() -> Path:
     """Where Shelfrip keeps your files when it isn't portable (see _data_dir)."""
     if os.name == "nt":
         return Path(os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")) / APP_NAME
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME
     return Path(os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")) / "shelfrip"
 
 
@@ -72,7 +74,10 @@ def write_config(cfg: dict) -> None:
     with CONFIG_LOCK:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = CONFIG_PATH.with_name(f"config.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
+            if os.name != "nt":
+                os.fchmod(f.fileno(), 0o600)  # also tighten an existing temp file before writing secrets
+            f.write(json.dumps(cfg, indent=2))
         for attempt in range(5):
             try:
                 tmp.replace(CONFIG_PATH)
@@ -100,7 +105,7 @@ _OLD_DEFAULTS = {
 
 def _old_data_dir() -> Path | None:
     """Where the app kept your files while it was called Disc Ripper (before 2026-11-18)."""
-    if os.environ.get("DISC_RIPPER_DATA") or DATA_DIR == APP_DIR:
+    if sys.platform == "darwin" or os.environ.get("DISC_RIPPER_DATA") or DATA_DIR == APP_DIR:
         return None
     if os.name == "nt":
         return Path(os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")) / "Disc Ripper"
@@ -265,6 +270,9 @@ def folder_problem(path, exc: BaseException, what: str = "the folder") -> str:
         why = ("Windows refused access. If Windows Security showed \"Unauthorized changes blocked\", its Controlled folder "
                "access is protecting that folder: allow Shelfrip (and MakeMKV) under Virus & threat protection > "
                "Ransomware protection, or choose a folder outside Documents, Videos and Desktop")
+        if sys.platform == "darwin":
+            why = ("macOS refused access. Check this folder's permissions and allow the app or terminal "
+                   "access under System Settings > Privacy & Security > Files and Folders, or choose another folder")
     elif code in (21,):
         why = "the drive isn't ready (is it a disc drive, or a USB drive that was unplugged?)"
     elif code in (53, 67, 64, 59, 1219, 1326):

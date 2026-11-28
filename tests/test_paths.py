@@ -66,7 +66,7 @@ class PortableCopy(unittest.TestCase):
 
     def start(self, app: Path, home: Path, **extra) -> str:
         env = {k: v for k, v in os.environ.items() if k not in ("SHELFRIP_DATA", "DISC_RIPPER_DATA", "APPDATA")}
-        env.update(XDG_CONFIG_HOME=str(home), APPDATA=str(home), **extra)
+        env.update(XDG_CONFIG_HOME=str(home), APPDATA=str(home), HOME=str(home), **extra)
         return subprocess.run([sys.executable, "-c", "import paths; print(repr(paths.MIGRATION_NOTE))"], cwd=app,
                               env=env, capture_output=True, text=True, check=True).stdout.strip()
 
@@ -77,6 +77,8 @@ class PortableCopy(unittest.TestCase):
         shutil.copy2(ROOT / "paths.py", self.app / "paths.py")
         (self.app / "portable.txt").write_text("")
         self.inst = self.home / ("Shelfrip" if os.name == "nt" else "shelfrip")
+        if sys.platform == "darwin":
+            self.inst = self.home / "Library/Application Support/Shelfrip"
         (self.inst / ".cache").mkdir(parents=True)
         (self.inst / "backups").mkdir()
         (self.inst / "config.json").write_text('{"rip_dir": "E:/Ripped"}')
