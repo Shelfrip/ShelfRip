@@ -162,11 +162,18 @@ MAKEMKV_URL = "https://www.makemkv.com/download/"
 
 
 def find_makemkv(cfg: dict) -> str | None:
-    """makemkvcon: where the settings say, else the usual install folders, else on PATH."""
+    """makemkvcon: where the settings say, else the usual install folders, else on PATH.
+
+    The setting can point at MakeMKV's own window program (makemkv.exe) or its folder by
+    mistake. Running makemkv.exe opens the MakeMKV window instead of ripping (issue #39),
+    so only a makemkvcon program counts: from a wrong file, its folder's makemkvcon is used."""
     cands = []
     if cfg.get("makemkvcon_path"):
-        p = Path(cfg["makemkvcon_path"])
-        cands += [p, p.with_name("makemkvcon64.exe"), p.with_name("makemkvcon.exe")]
+        p = Path(str(cfg["makemkvcon_path"]).strip().strip('"'))
+        folder = p if p.is_dir() else p.parent
+        if not p.is_dir() and p.name.lower().startswith("makemkvcon"):
+            cands.append(p)
+        cands += [folder / "makemkvcon64.exe", folder / "makemkvcon.exe", folder / "makemkvcon"]
     for base in (r"C:\Program Files (x86)\MakeMKV", r"C:\Program Files\MakeMKV"):
         cands += [Path(base) / "makemkvcon64.exe", Path(base) / "makemkvcon.exe"]
     for c in cands:
