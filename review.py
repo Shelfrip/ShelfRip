@@ -1085,8 +1085,44 @@ def _forget_progress() -> None:
         pass
 
 
+def _mp4_length(path: Path) -> float:
+    """Seconds from an MP4's movie header (moov/mvhd). MKVToolNix reads MP4s but gives no length
+    for them, so a HandBrake MP4 encode used to look 0 s long and was thrown away."""
+    import struct
+    def boxes(f, start: int, end: int):
+        pos = start
+        while pos + 8 <= end:
+            f.seek(pos)
+            size, kind = struct.unpack(">I4s", f.read(8))
+            head = 8
+            if size == 1:
+                size, head = struct.unpack(">Q", f.read(8))[0], 16
+            elif size == 0:
+                size = end - pos
+            if size < head:
+                return
+            yield kind, pos + head, pos + size
+            pos += size
+    with open(path, "rb") as f:
+        end = f.seek(0, 2)
+        for kind, body, stop in boxes(f, 0, end):
+            if kind == b"moov":
+                for k2, b2, _ in boxes(f, body, stop):
+                    if k2 == b"mvhd":
+                        f.seek(b2)
+                        version = f.read(4)[0]
+                        if version == 1:
+                            _, _, scale, length = struct.unpack(">QQIQ", f.read(28))
+                        else:
+                            _, _, scale, length = struct.unpack(">IIII", f.read(16))
+                        return length / scale if scale else 0
+    return 0
+
+
 def _length(path: Path, mkvmerge: str) -> float:
     import subprocess
+    if path.suffix.lower() in (".mp4", ".m4v"):
+        return _mp4_length(path)
     r = subprocess.run([mkvmerge, "-J", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=300, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     return (json.loads(r.stdout or "{}").get("container", {}).get("properties", {}).get("duration") or 0) / 1e9
@@ -1228,6 +1264,8 @@ def _place(src: Path, dst: Path, it: dict, job: dict, folder: Path, step: str) -
     size, base = src.stat().st_size, job.get("done_bytes", 0)
 
     def progress(f):  # the encode is most of the work for this title: count it as 95% of its share
+        if job.get("stop"):  # HandBrake can still print progress after Stop: keep "Filing stopped" showing
+            return
         job["done_bytes"] = base + int(size * 0.95 * f)
         job["current"] = f"{step}: encoding with HandBrake ({round(100 * f)}%): {dst.name}"
         job["beat"] = time.time()

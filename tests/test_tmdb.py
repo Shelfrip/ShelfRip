@@ -65,5 +65,20 @@ class Requests(unittest.TestCase):
         self.assertEqual(req.get_header("Authorization"), "Bearer eyJtoken")
 
 
+class Check(unittest.TestCase):
+    def test_check_sends_shelfrip_agent(self):
+        """Cloudflare (the shared key's server) refuses Python's default User-Agent, so the
+        Settings check said "TMDB answered 403" while lookups worked."""
+        import health
+        seen = []
+        def fake(req, timeout=0):
+            seen.append(req)
+            return io.BytesIO(b"{}")
+        with mock.patch.object(urllib.request, "urlopen", fake):
+            res = health.tmdb_check("", wait=5, base="http://db.test/v1/tmdb/agent-check")
+        self.assertEqual(res["detail"], "using Shelfrip's shared key")
+        self.assertEqual(seen[0].get_header("User-agent"), paths.USER_AGENT)
+
+
 if __name__ == "__main__":
     unittest.main()

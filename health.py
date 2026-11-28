@@ -198,7 +198,7 @@ def tmdb_check(key: str, wait: float = 0, base: str = "") -> dict | None:
     """Your own key (key), or the Shelfrip server's shared one (base = its /v1/tmdb address, key "")."""
     def run():
         key_ = key.strip()
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", "User-Agent": paths.USER_AGENT}  # Cloudflare (the shared key) refuses Python's default agent
         url = (base.rstrip("/") or "https://api.themoviedb.org/3") + "/configuration"
         if base:
             pass
