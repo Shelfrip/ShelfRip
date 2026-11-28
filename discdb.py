@@ -58,23 +58,29 @@ def fingerprint(root: str) -> dict | None:
     """TheDiscDB content hash for a disc mounted at root (e.g. 'D:\\').
 
     MD5 over each file's size as an 8-byte little-endian number, files sorted by
-    name: BDMV\\STREAM\\*.m2ts for Blu-ray/4K, every file in VIDEO_TS for DVD.
-    Only reads the directory listing, so it's quick and doesn't disturb the drive.
+    name: BDMV\\STREAM\\*.m2ts for Blu-ray/4K, VIDEO_TS .IFO/.BUP/.VOB files for DVD.
+    Only reads file metadata. DVDs also return legacy_hash when the old all-files
+    hash differs, allowing existing catalog and shared records to keep matching.
     """
     base = Path(root)
-    for sub, ext, layout in ((("BDMV", "STREAM"), ".m2ts", "bluray"), (("VIDEO_TS",), None, "dvd")):
+    for sub, ext, layout in ((("BDMV", "STREAM"), ".m2ts", "bluray"), (("VIDEO_TS",), (".ifo", ".bup", ".vob"), "dvd")):
         d = base.joinpath(*sub)
         try:
             if not d.is_dir():
                 continue
-            names = sorted(p.name for p in d.iterdir()
-                           if p.is_file() and (ext is None or p.name.lower().endswith(ext)))
+            all_names = sorted(p.name for p in d.iterdir() if p.is_file())
+            names = [n for n in all_names if ext is None or n.lower().endswith(ext)]
             if not names:
                 continue
-            md5 = hashlib.md5()
-            for n in names:
-                md5.update(struct.pack("<Q", (d / n).stat().st_size))
-            return {"content_hash": md5.hexdigest().upper(), "layout": layout, "files": len(names)}
+            sizes = {n: struct.pack("<Q", (d / n).stat().st_size) for n in (all_names if layout == "dvd" else names)}
+            def hash_files(selected):
+                return hashlib.md5(b"".join(sizes[n] for n in selected), usedforsecurity=False).hexdigest().upper()
+            result = {"content_hash": hash_files(names), "layout": layout, "files": len(names)}
+            if layout == "dvd":
+                legacy = hash_files(all_names)
+                if legacy != result["content_hash"]:
+                    result["legacy_hash"] = legacy
+            return result
         except OSError:
             return None
     return None

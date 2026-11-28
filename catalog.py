@@ -144,10 +144,11 @@ def lookup(disc: dict, titles: list[dict], path: Path = DB_PATH) -> dict | None:
     con = connect(path)
     try:
         row = None
-        h = disc.get("content_hash")
-        if h:
+        for h in dict.fromkeys(filter(None, (disc.get("content_hash"), disc.get("legacy_hash")))):
             row = con.execute("SELECT * FROM discs WHERE content_hash = ? ORDER BY filed_at DESC LIMIT 1",
                               (h,)).fetchone()
+            if row is not None:
+                break
         if row is None:
             sizes = sorted((int(t.get("size_bytes") or 0) for t in titles), reverse=True)
             sizes = [s for s in sizes if s > 50_000_000][:3]

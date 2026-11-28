@@ -98,14 +98,19 @@ def lookup(disc: dict, titles: list[dict], cfg: dict, log=print) -> dict | None:
     base = base_url(cfg)
     if not base or not cfg.get("use_community", True):
         return None
-    h, s = str(disc.get("content_hash") or "").lower(), signature(disc)
-    if not h and not s:
-        return None
-    try:
-        ans = _http(f"{base}/v1/disc?" + urllib.parse.urlencode({k: v for k, v in (("h", h), ("s", s)) if v}))
-    except Exception as exc:
-        log(f"    (Shelfrip disc database lookup failed: {exc})")
-        return None
+    hashes = dict.fromkeys(str(disc.get(k) or "").lower() for k in ("content_hash", "legacy_hash"))
+    queries = [{"h": h} for h in hashes if h]
+    if s := signature(disc):
+        queries.append({"s": s})
+    ans = {}
+    for query in queries:
+        try:
+            ans = _http(f"{base}/v1/disc?" + urllib.parse.urlencode(query))
+        except Exception as exc:
+            log(f"    (Shelfrip disc database lookup failed: {exc})")
+            continue
+        if ans.get("found") and ans.get("kind"):
+            break
     if not ans.get("found") or not ans.get("kind"):
         return None
     # Answers come from other people's filings: only use one that's well formed, so a bad value

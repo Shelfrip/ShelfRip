@@ -789,6 +789,8 @@ def rip_disc(cfg: dict, drive: dict) -> dict:
             fp = discdb.fingerprint(device + "\\")
             if fp:
                 disc.update(content_hash=fp["content_hash"], disc_layout=fp["layout"])
+                if fp.get("legacy_hash"):
+                    disc["legacy_hash"] = fp["legacy_hash"]
         except Exception as exc:
             log(f"{device} [{label}] couldn't fingerprint disc ({exc})")
         scanner = Path(cfg.get("thediscdb_scan_path") or "")

@@ -184,10 +184,15 @@ def identify_disc(dev: str, label: str, cfg: dict) -> dict | None:
     import discdb
     fp = discdb.fingerprint(dev + "\\") if len(dev) == 2 and dev[1] == ":" else None
     h = (fp or {}).get("content_hash")
-    if h and catalog.DB_PATH.exists():
+    hashes = list(dict.fromkeys(filter(None, (h, (fp or {}).get("legacy_hash")))))
+    if hashes and catalog.DB_PATH.exists():
         con = catalog.connect()
         try:
-            row = con.execute("SELECT * FROM discs WHERE content_hash = ? ORDER BY filed_at DESC LIMIT 1", (h,)).fetchone()
+            row = None
+            for candidate in hashes:
+                row = con.execute("SELECT * FROM discs WHERE content_hash = ? ORDER BY filed_at DESC LIMIT 1", (candidate,)).fetchone()
+                if row is not None:
+                    break
             if row:
                 eps = [(r["season"], e) for r in con.execute(
                     "SELECT * FROM titles WHERE disc_id = ? AND kept = 1 AND role = 'episode'", (row["id"],))
